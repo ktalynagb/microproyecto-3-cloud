@@ -6,7 +6,7 @@ deduplication, and basic validation.
 """
 import uuid
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import streamlit as st
 
@@ -22,13 +22,12 @@ class BatchImage:
     content: bytes
     status: Status = "pending"
     error_message: Optional[str] = None
-    
-    # Campos E1 (se llenan luego cuando haya inferencia)
+
+    # Campos de inferencia PCB (se llenan luego de la detección)
     timestamp: Optional[str] = None
-    predicted_label: Optional[str] = None
-    prob_ai: Optional[float] = None
-    prob_real: Optional[float] = None
-    preprocess_time_ms: Optional[float] = None
+    has_defects: Optional[bool] = None
+    defects_summary: Optional[List[Dict[str, Any]]] = None
+    processed_image_base64: Optional[str] = None
     inference_time_ms: Optional[float] = None
 
 

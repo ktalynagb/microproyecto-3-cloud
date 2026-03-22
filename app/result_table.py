@@ -1,7 +1,7 @@
-"""Results table builder module.
+"""Results table builder module for PCB defect inspection.
 
 This module converts batch processing results into a pandas DataFrame
-following the E1 schema, and provides CSV export functionality.
+following the PCB inspection schema, and provides CSV export functionality.
 """
 from __future__ import annotations
 
@@ -12,52 +12,12 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 
-LABEL_ALIASES = {
-    "ai": "ai",
-    "ia": "ai",
-    "artificial": "ai",
-    "fake": "ai",
-    "generated": "ai",
-    "real": "real",
-    "hum": "real",
-    "human": "real",
-    "humana": "real",
-    "humano": "real",
-}
-
-
 SCHEMA_COLUMNS = [
-    "timestamp",
-    "filename",
-    "status",
-    "predicted_label",
-    "prob_ai",
-    "prob_real",
-    "preprocess_time_ms",
-    "inference_time_ms",
-    "error_message",
+    "Nombre Archivo",
+    "Estado",
+    "Hallazgos",
+    "Tiempo Inferencia",
 ]
-
-
-
-
-def normalize_prediction_label(label: Any) -> Any:
-    """Normalize model/UI aliases to canonical labels: ai | real.
-
-    Args:
-        label: Raw prediction label from the model or UI.
-
-    Returns:
-        Canonical label string ('ai' or 'real'), or None if unresolvable.
-    """
-    if label is None or (isinstance(label, float) and pd.isna(label)):
-        return None
-
-    normalized = str(label).strip().casefold()
-    if not normalized:
-        return None
-
-    return LABEL_ALIASES.get(normalized, normalized)
 
 
 def utc_now_iso() -> str:
@@ -75,7 +35,7 @@ def utc_now_iso() -> str:
 
 
 class ResultsTableBuilder:
-    """Convert batch items to a DataFrame following the E1 schema.
+    """Convert batch items to a DataFrame following the PCB inspection schema.
 
     Supports BatchImage dataclass instances, plain dicts, and generic
     objects with public attributes.
@@ -93,81 +53,69 @@ class ResultsTableBuilder:
     def from_batch_items(self, items: List[Any]) -> pd.DataFrame:
         """Convert a list of batch items to a DataFrame.
 
-        Each item may be a BatchImage dataclass, a dict, or an object
-        with public attributes. Normalizes labels and E1 status values.
-
         Args:
             items: List of batch items to convert.
 
         Returns:
-            DataFrame with columns defined by self.columns.
+            DataFrame with columns: Nombre Archivo, Estado, Hallazgos,
+            Tiempo Inferencia.
         """
         rows: List[Dict[str, Any]] = []
 
         for it in items:
-            # Support dataclass (BatchImage) objects or session_state dicts
             d = self._to_dict(it)
 
             filename = d.get("filename") or d.get("name") or "unknown"
-            ui_status = d.get("status")  # pending/processing/done/error
-            timestamp = d.get("timestamp") or utc_now_iso()
-
-            # Prediction fields (may be None before inference runs)
-            predicted_label = normalize_prediction_label(
-                d.get("predicted_label")
-            )
-            prob_ai = d.get("prob_ai")
-            prob_real = d.get("prob_real")
-            preprocess_time_ms = d.get("preprocess_time_ms")
+            ui_status = d.get("status")
+            has_defects = d.get("has_defects")
+            defects_summary = d.get("defects_summary") or []
             inference_time_ms = d.get("inference_time_ms")
             error_message = d.get("error_message")
 
-            # Normalize to E1 schema: status is ok or error
+            # Determine approval state
             if ui_status == "error":
-                status = "error"
-                if not error_message:
-                    error_message = "Unknown error"
-            elif (
-                predicted_label is not None
-                or prob_ai is not None
-                or prob_real is not None
-            ):
-                # Prediction present: classify as ok
-                status = "ok"
+                estado = "Rechazado"
+                hallazgos = error_message or "Error desconocido"
+            elif has_defects is True:
+                estado = "Rechazado"
+                if defects_summary:
+                    hallazgos = ", ".join(
+                        f"{d['class']} ({d['confidence']:.2f})"
+                        for d in defects_summary
+                    )
+                else:
+                    hallazgos = "Defectos detectados"
+            elif has_defects is False:
+                estado = "Aprobado"
+                hallazgos = "Sin defectos"
             else:
-                # Not yet processed: mark as error with message
-                status = "error"
-                error_message = error_message or "Not processed yet"
+                estado = "Pendiente"
+                hallazgos = "No procesado"
+
+            # Format inference time
+            if inference_time_ms is not None:
+                try:
+                    tiempo = f"{float(inference_time_ms):.1f} ms"
+                except (TypeError, ValueError):
+                    tiempo = str(inference_time_ms)
+            else:
+                tiempo = "-"
 
             rows.append(
                 {
-                    "timestamp": timestamp,
-                    "filename": filename,
-                    "status": status,
-                    "predicted_label": predicted_label,
-                    "prob_ai": prob_ai,
-                    "prob_real": prob_real,
-                    "preprocess_time_ms": preprocess_time_ms,
-                    "inference_time_ms": inference_time_ms,
-                    "error_message": error_message,
+                    "Nombre Archivo": filename,
+                    "Estado": estado,
+                    "Hallazgos": hallazgos,
+                    "Tiempo Inferencia": tiempo,
                 }
             )
 
         df = pd.DataFrame(rows)
 
-        # Ensure all E1 columns exist and are in the correct order
         for c in self.columns:
             if c not in df.columns:
                 df[c] = None
         df = df[self.columns]
-
-        # Cast numeric fields that may have arrived as strings
-        num_cols = [
-            "prob_ai", "prob_real",
-            "preprocess_time_ms", "inference_time_ms",
-        ]
-        for num_col in num_cols:
-            df[num_col] = pd.to_numeric(df[num_col], errors="coerce")
 
         return df
 
@@ -198,5 +146,4 @@ class ResultsTableBuilder:
             return asdict(it)
         if isinstance(it, dict):
             return dict(it)
-        # Fallback: use public attributes
         return {k: getattr(it, k) for k in dir(it) if not k.startswith("_")}

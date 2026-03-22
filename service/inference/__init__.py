@@ -1,9 +1,8 @@
-"""Módulo de inferencia para ImageAivsReal.
+"""Módulo de inferencia para detección de defectos en PCB.
 
-Expone las funciones de preprocesamiento e inferencia de imágenes
-utilizadas por el servidor gRPC y el motor central del servicio.
+Expone las funciones de inferencia del motor YOLOv8 utilizadas
+por el servidor FastAPI.
 """
-from .preprocessing import preprocess_image
-from .inference_engine import run_inference
+from .inference_engine import get_model, run_inference
 
-__all__ = ["preprocess_image", "run_inference"]
+__all__ = ["get_model", "run_inference"]
