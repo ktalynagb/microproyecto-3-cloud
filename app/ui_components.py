@@ -1,4 +1,4 @@
-"""Reusable UI component module for the AI vs Real app.
+"""Reusable UI component module for the PCB inspection app.
 
 Responsibility: render static or configuration UI elements.
 Contains no business logic or session state management.
@@ -6,18 +6,19 @@ Contains no business logic or session state management.
 import pandas as pd
 import streamlit as st
 
-from clientGrpc import GRPCClient, GRPCClientError
+from api_client import APIClient, APIClientError
 from report_pdf import build_pdf_bytes
 
 
 def render_header() -> None:
     """Render the app title and general description."""
-    st.title("Clasificacion de Imagenes (IA vs Real)")
+    st.title("Inspección de Calidad de PCB - Flux Solutions")
     st.write(
-        "Interfaz web (MVP) para apoyar la "
-        "**clasificacion probabilistica** de imagenes como "
-        "**Generadas por IA** o **Reales**, usando un modelo "
-        "preentrenado en modo inferencia (sin fine-tuning)."
+        "Sistema de inspección de calidad basada en visión artificial para "
+        "**detección de defectos en placas de circuito impreso (PCB)** "
+        "usando el modelo YOLOv8. Identifica fallas como "
+        "**Dry_joint, Incorrect_installation, PCB_damage, Short_circuit, "
+        "Mousebites y Opens**."
     )
 
 
@@ -25,37 +26,36 @@ def render_disclaimer() -> None:
     """Render the responsible use disclaimer warning."""
     st.warning(
         "⚠️ **Disclaimer de uso responsable**\n\n"
-        "- Esta herramienta es **de apoyo** para verificacion "
-        "preliminar.\n"
-        "- **No** es certificacion **forense/legal**.\n"
-        "- Los resultados son **probabilisticos** y pueden fallar; "
-        "no se garantiza exactitud del 100%.\n"
-        "- No usar como unica base para decisiones criticas."
+        "- Esta herramienta es **de apoyo** para inspección preliminar de PCB.\n"
+        "- **No** reemplaza la verificación manual por personal calificado.\n"
+        "- Los resultados son **probabilísticos** y pueden contener "
+        "falsos positivos/negativos.\n"
+        "- No usar como única base para decisiones de rechazo en línea de producción."
     )
 
 
-def render_sidebar() -> GRPCClient | None:
-    """Render the gRPC configuration sidebar.
+def render_sidebar() -> APIClient | None:
+    """Render the API configuration sidebar.
 
     Returns:
-        A connected GRPCClient instance, or None if connection fails.
+        An APIClient instance, or None if configuration is invalid.
     """
     with st.sidebar:
-        st.header("Conexion gRPC")
-        host = st.text_input("Host (vacio = localhost)", value="")
-        port_str = st.text_input("Puerto (vacio = 50051)", value="")
+        st.header("Conexión API")
+        host = st.text_input("Host (vacío = localhost)", value="")
+        port_str = st.text_input("Puerto (vacío = 8000)", value="")
         timeout_str = st.text_input(
-            "Timeout en segundos (vacio = 5)", value=""
+            "Timeout en segundos (vacío = 30)", value=""
         )
 
     try:
-        return GRPCClient(
+        return APIClient(
             host=host or None,
             port=int(port_str) if port_str else None,
             timeout=int(timeout_str) if timeout_str else None,
         )
-    except GRPCClientError as err:
-        st.error(f"No se pudo conectar al servidor gRPC: {err}")
+    except Exception as err:
+        st.error(f"Error al configurar el cliente API: {err}")
         return None
 
 
@@ -71,8 +71,8 @@ def render_summary(summary: dict) -> None:
 
     if fallidas == 0:
         st.success(
-            f"Analisis completado: {exitosas} de {total} "
-            "imagenes procesadas correctamente."
+            f"Análisis completado: {exitosas} de {total} "
+            "PCBs procesadas correctamente."
         )
     elif exitosas == 0:
         st.error(
@@ -81,22 +81,23 @@ def render_summary(summary: dict) -> None:
         )
     else:
         st.warning(
-            f"{fallidas} de {total} imagenes no pudieron procesarse."
+            f"{fallidas} de {total} imágenes no pudieron procesarse."
         )
         st.success(
-            f"{exitosas} de {total} imagenes procesadas correctamente."
+            f"{exitosas} de {total} PCBs procesadas correctamente."
         )
 
 
-def render_export_section(df: pd.DataFrame, builder) -> None:
+def render_export_section(df: pd.DataFrame, builder, batch_items=None) -> None:
     """Render the export section with CSV and PDF download buttons.
 
     Args:
         df: Results DataFrame to export.
         builder: ResultsTableBuilder instance used for CSV export.
+        batch_items: Optional list of BatchImage instances for PDF image gallery.
     """
     st.divider()
-    st.header("3) Exportacion")
+    st.header("3) Exportación")
 
     col1, col2 = st.columns(2)
 
@@ -104,17 +105,17 @@ def render_export_section(df: pd.DataFrame, builder) -> None:
         st.download_button(
             label="Descargar CSV",
             data=builder.to_csv_bytes(df),
-            file_name="resultados_ai_vs_real.csv",
+            file_name="resultados_inspeccion_pcb.csv",
             mime="text/csv",
             use_container_width=True,
         )
 
     with col2:
-        pdf_bytes = build_pdf_bytes(df)
+        pdf_bytes = build_pdf_bytes(df, batch_items=batch_items)
         st.download_button(
             label="Descargar PDF",
             data=pdf_bytes,
-            file_name="reporte_ai_vs_real.pdf",
+            file_name="reporte_inspeccion_pcb.pdf",
             mime="application/pdf",
             use_container_width=True,
         )

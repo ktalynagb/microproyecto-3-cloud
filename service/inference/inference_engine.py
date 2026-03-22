@@ -1,124 +1,99 @@
-"""
-Modulo de inferencia central para el modelo Ateeqq/ai-vs-human-image-detector.
+"""Motor de inferencia para detección/segmentación de defectos en PCB.
 
-Funcion reutilizable que ejecuta el modelo sobre una imagen y retorna
-la prediccion (clase ganadora), las probabilidades por clase, los tiempos
-de ejecucion en milisegundos y el estado del proceso (ok/error), en formato
-serializable (float/str), lista para ser usada desde gRPC o GUI.
+Usa el modelo YOLOv8 de Ultralytics (keremberke/yolov8n-pcb-defect-segmentation)
+para detectar fallas como Dry_joint, Incorrect_installation, PCB_damage,
+Short_circuit, Mousebites y Opens.
 
-La funcion NUNCA lanza excepciones al caller: cualquier error se captura
-internamente y se retorna como respuesta estandarizada con status="error",
-permitiendo el procesamiento continuo de lotes de imagenes.
+La función run_inference recibe los bytes de la imagen, la convierte a array
+NumPy/OpenCV y la pasa al modelo YOLO. Retorna la imagen procesada con bounding
+boxes codificada en Base64, un booleano has_defects y una lista de defectos
+con su clase y confianza.
+
+La función NUNCA propaga excepciones al caller: cualquier error se captura
+internamente y se retorna como respuesta estandarizada con status="error".
 
 Uso:
-    from service.inference.inference_engine import run_inference
-    result = run_inference(image, model, processor)
+    from service.inference.inference_engine import run_inference, get_model
+    model = get_model()
+    result = run_inference(image_bytes, model)
     if result["status"] == "ok":
-        print(result["label"])
+        print(result["has_defects"])
+        print(result["defects_summary"])
     else:
-        print(result["error"]["message"])
-
-Comando Make asociado:
-    make test-inference  ->  Ejecuta los tests unitarios del modulo
-
-Unidades de tiempo:
-    Todos los tiempos se expresan en milisegundos (ms) como float
-    redondeado a 3 decimales. Se usa time.perf_counter() para maxima
-    precision en medicion de intervalos cortos.
-
-Codigos de error estandarizados:
-    INVALID_IMAGE   -> TypeError o ValueError en preprocesamiento
-    INFERENCE_ERROR -> RuntimeError durante la inferencia del modelo
-    UNKNOWN_ERROR   -> Cualquier otra excepcion inesperada
+        print(result["error"])
 """
 
+import base64
 import logging
+import os
+import threading
 import time
-from typing import Union
+from typing import Any, Dict, List, Optional
 
-import torch
-from PIL import Image
-
-from .preprocessing import preprocess_image
+import cv2
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Respuesta de error estandarizada (helper interno)
-# ---------------------------------------------------------------------------
-
-_EMPTY_TIMING = {
-    "preprocessing_ms": 0.0,
-    "inference_ms": 0.0,
-    "total_ms": 0.0,
-}
+_model: Optional[Any] = None
+_model_lock = threading.Lock()
 
 
-def _error_response(
-    code: str,
-    message: str,
-    preprocessing_ms: float = 0.0,
-) -> dict:
-    """Construye una respuesta de error estandarizada y serializable."""
-    timing = {
-        "preprocessing_ms": preprocessing_ms,
-        "inference_ms": 0.0,
-        "total_ms": preprocessing_ms,
-    }
-    return {
-        "status": "error",
-        "label": None,
-        "label_id": None,
-        "scores": {},
-        "timing": timing,
-        "error": {
-            "code": code,
-            "message": message,
-        },
-    }
+def get_model() -> Any:
+    """Carga y cachea el modelo YOLO en memoria (singleton thread-safe).
 
+    Lee HF_MODEL_ID del entorno. Por defecto usa el modelo de PCB de
+    keremberke en Hugging Face.
 
-# ---------------------------------------------------------------------------
-# Funcion principal
-# ---------------------------------------------------------------------------
+    Returns:
+        Instancia de ultralytics.YOLO lista para inferencia.
+    """
+    global _model
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                from ultralytics import YOLO
+
+                hf_model_id = os.getenv(
+                    "HF_MODEL_ID",
+                    "keremberke/yolov8n-pcb-defect-segmentation",
+                )
+                logger.info("Cargando modelo YOLO: %s", hf_model_id)
+                _model = YOLO(hf_model_id)
+                logger.info("Modelo YOLO cargado correctamente.")
+    return _model
+
 
 def run_inference(
-    image: Union[Image.Image, bytes],
-    model,
-    processor,
-) -> dict:
-    """Ejecuta inferencia sobre una imagen usando el modelo ViT.
+    image_bytes: bytes,
+    model: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Ejecuta detección de defectos sobre los bytes de una imagen PCB.
 
-    Preprocesa la imagen, ejecuta el modelo en modo evaluacion, calcula
-    softmax sobre los logits y retorna la prediccion con sus probabilidades
-    por clase, tiempos de ejecucion y estado del proceso.
+    Convierte los bytes a un array NumPy/OpenCV, ejecuta el modelo YOLO,
+    genera la imagen anotada con bounding boxes y extrae el resumen de
+    defectos detectados.
 
-    Esta funcion NUNCA propaga excepciones al caller. Cualquier error se
-    captura y se retorna como un dict con status="error", permitiendo el
-    procesamiento continuo de lotes.
+    Esta función NUNCA propaga excepciones al caller. Cualquier error se
+    captura y se retorna como dict con status="error".
 
     Args:
-        image: Imagen fuente. Puede ser:
-            - PIL.Image.Image: usada directamente.
-            - bytes: decodificada internamente antes del preprocesamiento.
-        model: Modelo de Hugging Face ya cargado
-            (AutoModelForImageClassification o compatible).
-            Debe tener model.config.id2label.
-        processor: Instancia de AutoImageProcessor (o compatible) ya cargada.
+        image_bytes: Bytes crudos de la imagen (JPG o PNG).
+        model: Instancia YOLO ya cargada. Si es None, se carga el modelo
+            mediante get_model().
 
     Returns:
         Dict con la siguiente estructura en caso exitoso::
 
             {
                 "status": "ok",
-                "label": "AI",
-                "label_id": 0,
-                "scores": {"AI": 0.9741, "Real": 0.0259},
-                "timing": {
-                    "preprocessing_ms": 12.345,
-                    "inference_ms": 45.678,
-                    "total_ms": 58.023
-                },
+                "has_defects": True,
+                "defects_summary": [
+                    {"class": "Dry_joint", "confidence": 0.87},
+                    {"class": "Short_circuit", "confidence": 0.72}
+                ],
+                "processed_image_base64": "<base64 string>",
+                "timing": {"inference_ms": 123.456},
                 "error": None
             }
 
@@ -126,135 +101,80 @@ def run_inference(
 
             {
                 "status": "error",
-                "label": None,
-                "label_id": None,
-                "scores": {},
-                "timing": {
-                    "preprocessing_ms": 1.234,
-                    "inference_ms": 0.0,
-                    "total_ms": 1.234
-                },
-                "error": {
-                    "code": "INVALID_IMAGE",
-                    "message": "Descripcion del error."
-                }
+                "has_defects": False,
+                "defects_summary": [],
+                "processed_image_base64": "",
+                "timing": {"inference_ms": 0.0},
+                "error": "Descripcion del error."
+            }
+    """
+    if model is None:
+        model = get_model()
+
+    t0 = time.perf_counter()
+
+    try:
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return {
+                "status": "error",
+                "has_defects": False,
+                "defects_summary": [],
+                "processed_image_base64": "",
+                "timing": {"inference_ms": 0.0},
+                "error": "No se pudo decodificar la imagen. Verifica que sea un JPG o PNG válido.",
             }
 
-    Example:
-        >>> from PIL import Image
-        >>> from transformers import (
-        ...     AutoImageProcessor,
-        ...     AutoModelForImageClassification,
-        ... )
-        >>> processor = AutoImageProcessor.from_pretrained(
-        ...     "dima806/ai_vs_real_image_detection"
-        ... )
-        >>> model = AutoModelForImageClassification.from_pretrained(
-        ...     "dima806/ai_vs_real_image_detection"
-        ... )
-        >>> img = Image.open("photo.jpg")
-        >>> result = run_inference(img, model, processor)
-        >>> if result["status"] == "ok":
-        ...     print(result["label"])
-        ...     print(result["timing"]["total_ms"])
-        ... else:
-        ...     print(result["error"]["code"])
-    """
-    preprocessing_ms = 0.0
+        results = model(img)
 
-    # 1. Preprocesar imagen -> inputs dict con pixel_values
-    # (con medicion de tiempo)
-    try:
-        t0_preprocess = time.perf_counter()
-        inputs = preprocess_image(image, processor)
-        t1_preprocess = time.perf_counter()
-        preprocessing_ms = round((t1_preprocess - t0_preprocess) * 1000, 3)
-    except (TypeError, ValueError) as exc:
-        logger.warning("Error de imagen invalida: %s", exc)
-        return _error_response(
-            code="INVALID_IMAGE",
-            message=str(exc),
-            preprocessing_ms=preprocessing_ms,
+        t1 = time.perf_counter()
+        inference_ms = round((t1 - t0) * 1000, 3)
+
+        # Generar imagen anotada con bounding boxes / máscaras
+        annotated_bgr = results[0].plot()
+        # Codificar como JPEG y luego como Base64
+        _, buffer = cv2.imencode(".jpg", annotated_bgr)
+        processed_image_b64 = base64.b64encode(buffer.tobytes()).decode("utf-8")
+
+        # Extraer resumen de defectos detectados
+        defects_summary: List[Dict[str, Any]] = []
+        has_defects = False
+
+        if results[0].boxes is not None and len(results[0].boxes) > 0:
+            has_defects = True
+            for box in results[0].boxes:
+                cls_id = int(box.cls.item())
+                cls_name = model.names[cls_id]
+                confidence = round(float(box.conf.item()), 4)
+                defects_summary.append(
+                    {"class": cls_name, "confidence": confidence}
+                )
+
+        logger.debug(
+            "Inferencia OK: has_defects=%s, defectos=%d, inference_ms=%.3f",
+            has_defects,
+            len(defects_summary),
+            inference_ms,
         )
+
+        return {
+            "status": "ok",
+            "has_defects": has_defects,
+            "defects_summary": defects_summary,
+            "processed_image_base64": processed_image_b64,
+            "timing": {"inference_ms": inference_ms},
+            "error": None,
+        }
+
     except Exception as exc:
-        logger.error("Error inesperado en preprocesamiento: %s", exc)
-        return _error_response(
-            code="UNKNOWN_ERROR",
-            message=f"Error inesperado en preprocesamiento: {exc}",
-            preprocessing_ms=preprocessing_ms,
-        )
+        logger.error("Error durante la inferencia YOLO: %s", exc)
+        return {
+            "status": "error",
+            "has_defects": False,
+            "defects_summary": [],
+            "processed_image_base64": "",
+            "timing": {"inference_ms": 0.0},
+            "error": f"Error durante la inferencia del modelo: {exc}",
+        }
 
-    # 2. Inferencia en modo evaluacion sin gradientes (con medicion de tiempo)
-    try:
-        model.eval()
-        t0_inference = time.perf_counter()
-        with torch.no_grad():
-            outputs = model(**inputs)
-        t1_inference = time.perf_counter()
-        inference_ms = round((t1_inference - t0_inference) * 1000, 3)
-    except Exception as exc:
-        logger.error("Error durante la inferencia: %s", exc)
-        return _error_response(
-            code="INFERENCE_ERROR",
-            message=f"Error durante la inferencia del modelo: {exc}",
-            preprocessing_ms=preprocessing_ms,
-        )
-
-    # 3. Validar que el modelo retorno logits
-    if not hasattr(outputs, "logits"):
-        logger.error("El modelo no retorno logits.")
-        return _error_response(
-            code="INFERENCE_ERROR",
-            message=(
-                "El modelo no retorno 'logits'. "
-                "Verifica que sea un modelo de clasificacion de imagenes."
-            ),
-            preprocessing_ms=preprocessing_ms,
-        )
-
-    logits = outputs.logits  # shape: (1, num_classes)
-
-    # 4. Clase predicha (argmax)
-    label_id = int(torch.argmax(logits, dim=-1).item())
-
-    # 5. Probabilidades por clase (softmax -> float)
-    probs = torch.softmax(logits, dim=-1).squeeze(0)  # shape: (num_classes,)
-
-    # 6. Mapear id2label desde la configuracion del modelo
-    id2label = model.config.id2label  # {0: "AI", 1: "Real"} o similar
-
-    scores = {
-        id2label[i]: round(float(probs[i]), 6)
-        for i in range(len(probs))
-    }
-
-    label = id2label[label_id]
-
-    # 7. Calcular total_ms como suma explicita de ambos tiempos
-    total_ms = round(preprocessing_ms + inference_ms, 3)
-
-    result = {
-        "status": "ok",
-        "label": label,
-        "label_id": label_id,
-        "scores": scores,
-        "timing": {
-            "preprocessing_ms": preprocessing_ms,
-            "inference_ms": inference_ms,
-            "total_ms": total_ms,
-        },
-        "error": None,
-    }
-
-    logger.debug(
-        "Inferencia exitosa. label=%s, label_id=%d, scores=%s, "
-        "preprocessing_ms=%.3f, inference_ms=%.3f, total_ms=%.3f",
-        label,
-        label_id,
-        scores,
-        preprocessing_ms,
-        inference_ms,
-        total_ms,
-    )
-
-    return result

@@ -1,18 +1,18 @@
-"""PDF report generator for AI vs Real image classification results.
+"""PDF report generator for PCB defect inspection - Flux Solutions Cali.
 
-Responsibility: build and return PDF bytes from a results DataFrame.
+Responsibility: build and return PDF bytes from a results DataFrame and
+optionally embed processed PCB images with detected defects highlighted.
 Has no Streamlit dependencies.
 """
 from __future__ import annotations
 
+import base64
 import io
 from datetime import datetime, timezone
-from typing import List
+from typing import Any, List, Optional
 
 import pandas as pd
 from reportlab.graphics import renderPDF  # noqa: F401
-from reportlab.graphics.charts.piecharts import Pie
-from reportlab.graphics.shapes import Drawing, Rect, String
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
@@ -20,6 +20,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import (
     HRFlowable,
+    Image as RLImage,
     PageBreak,
     Paragraph,
     SimpleDocTemplate,
@@ -55,7 +56,7 @@ def _styles() -> dict:
         "title": ParagraphStyle(
             "title",
             fontName="Helvetica-Bold",
-            fontSize=26,
+            fontSize=24,
             textColor=WHITE,
             alignment=TA_CENTER,
             spaceAfter=6,
@@ -113,6 +114,14 @@ def _styles() -> dict:
             textColor=TEXT_MUTED,
             alignment=TA_CENTER,
         ),
+        "img_caption": ParagraphStyle(
+            "img_caption",
+            fontName="Helvetica",
+            fontSize=8,
+            textColor=TEXT_MUTED,
+            alignment=TA_CENTER,
+            spaceAfter=4,
+        ),
     }
 
 
@@ -137,9 +146,9 @@ def _dark_background(canvas, doc):
     canvas.setFont("Helvetica", 7)
     date_str = datetime.now(REPORT_TIMEZONE).strftime("%Y-%m-%d %H:%M COT")
     footer_text = (
-        f"AI vs Real Image Detector  |  "
+        f"Inspección de Calidad PCB - Flux Solutions Cali  |  "
         f"Reporte generado el {date_str}  |  "
-        f"Pagina {doc.page}"
+        f"Página {doc.page}"
     )
     canvas.drawCentredString(A4[0] / 2, 1.0 * cm, footer_text)
     canvas.restoreState()
@@ -157,13 +166,20 @@ def _build_cover(styles: dict, df: pd.DataFrame) -> list:
         List of ReportLab flowable elements for the cover page.
     """
     story = []
-    story.append(Spacer(1, 3.5 * cm))
+    story.append(Spacer(1, 3.0 * cm))
 
-    story.append(Paragraph("AI vs Real", styles["title"]))
-    story.append(Spacer(1, 0.4 * cm))
+    story.append(Paragraph("Inspección de Calidad de PCB", styles["title"]))
+    story.append(Spacer(1, 0.3 * cm))
     story.append(
         Paragraph(
-            "Reporte de Clasificacion de Imagenes",
+            "Flux Solutions Cali",
+            styles["subtitle"],
+        )
+    )
+    story.append(Spacer(1, 0.2 * cm))
+    story.append(
+        Paragraph(
+            "Reporte de Detección de Defectos — YOLOv8",
             styles["subtitle"],
         )
     )
@@ -179,26 +195,25 @@ def _build_cover(styles: dict, df: pd.DataFrame) -> list:
 
     # Mini summary on cover page
     total = len(df)
-    exitosas = len(df[df["status"] == "ok"])
-    fallidas = total - exitosas
+    aprobadas = len(df[df["Estado"] == "Aprobado"])
+    rechazadas = len(df[df["Estado"] == "Rechazado"])
 
     stats = [
         [
             Paragraph(str(total), styles["stat_value"]),
-            Paragraph(str(exitosas), styles["stat_value"]),
-            Paragraph(str(fallidas), styles["stat_value"]),
+            Paragraph(str(aprobadas), styles["stat_value"]),
+            Paragraph(str(rechazadas), styles["stat_value"]),
         ],
         [
-            Paragraph("Total", styles["stat_label"]),
-            Paragraph("Exito", styles["stat_label"]),
-            Paragraph("Error", styles["stat_label"]),
+            Paragraph("Total PCBs", styles["stat_label"]),
+            Paragraph("Aprobadas", styles["stat_label"]),
+            Paragraph("Rechazadas", styles["stat_label"]),
         ],
     ]
 
     tbl = Table(stats, colWidths=[5 * cm, 5 * cm, 5 * cm])
     tbl.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), SURFACE),
-        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [SURFACE, SURFACE]),
         ("BOX", (0, 0), (-1, -1), 0.5, ACCENT),
         ("LINEAFTER", (0, 0), (1, -1), 0.5, ACCENT),
         ("TOPPADDING", (0, 0), (-1, -1), 14),
@@ -232,13 +247,13 @@ def _build_disclaimer(styles: dict) -> list:
     )
 
     items = [
-        "Esta herramienta es <b>de apoyo</b> para verificacion preliminar.",
-        "<b>No</b> constituye una certificacion <b>forense ni legal</b>.",
+        "Esta herramienta es <b>de apoyo</b> para inspección preliminar de PCB.",
+        "<b>No</b> reemplaza la verificación manual por personal calificado.",
         (
-            "Los resultados son <b>probabilisticos</b> y pueden contener "
-            "errores; no se garantiza exactitud del 100%."
+            "Los resultados son <b>probabilísticos</b> y pueden contener "
+            "falsos positivos/negativos."
         ),
-        "No debe usarse como unica base para decisiones criticas.",
+        "No usar como única base para decisiones de rechazo en línea de producción.",
     ]
     for item in items:
         story.append(Paragraph(f"&#x2022;  {item}", styles["disclaimer"]))
@@ -259,7 +274,7 @@ def _build_summary(styles: dict, df: pd.DataFrame) -> list:
         List of ReportLab flowable elements for the summary section.
     """
     story = []
-    story.append(Paragraph("Resumen Estadistico", styles["section"]))
+    story.append(Paragraph("Resumen Estadístico", styles["section"]))
     story.append(
         HRFlowable(
             width="100%", thickness=0.5, color=SURFACE, spaceAfter=8
@@ -267,21 +282,16 @@ def _build_summary(styles: dict, df: pd.DataFrame) -> list:
     )
 
     total = len(df)
-    exitosas = len(df[df["status"] == "ok"])
-    fallidas = total - exitosas
-    ai_count = len(df[df["predicted_label"] == "ai"])
-    real_count = len(df[df["predicted_label"] == "real"])
-
-    tasa = f"{(exitosas / total * 100):.1f}%" if total > 0 else "N/A"
+    aprobadas = len(df[df["Estado"] == "Aprobado"])
+    rechazadas = len(df[df["Estado"] == "Rechazado"])
+    tasa = f"{(aprobadas / total * 100):.1f}%" if total > 0 else "N/A"
 
     rows = [
-        ["Metrica", "Valor"],
-        ["Total de imagenes analizadas", str(total)],
-        ["Procesadas con exito", str(exitosas)],
-        ["Con error", str(fallidas)],
-        ["Tasa de exito", tasa],
-        ["Clasificadas como IA", str(ai_count)],
-        ["Clasificadas como Real", str(real_count)],
+        ["Métrica", "Valor"],
+        ["Total de PCBs analizadas", str(total)],
+        ["PCBs aprobadas (sin defectos)", str(aprobadas)],
+        ["PCBs rechazadas (con defectos)", str(rechazadas)],
+        ["Tasa de aprobación", tasa],
     ]
 
     col_w = [10 * cm, 5 * cm]
@@ -305,91 +315,12 @@ def _build_summary(styles: dict, df: pd.DataFrame) -> list:
     ]))
     story.append(tbl)
     story.append(Spacer(1, 0.6 * cm))
-
-    # Pie chart if there are valid predictions
-    if exitosas > 0 and (ai_count > 0 or real_count > 0):
-        story.extend(_build_pie_chart(ai_count, real_count, styles))
-
-    return story
-
-
-# ── Pie chart ─────────────────────────────────────────────────────────────
-def _build_pie_chart(ai_count: int, real_count: int, styles: dict) -> list:
-    """Build the predictions distribution pie chart section.
-
-    Args:
-        ai_count: Number of images classified as AI-generated.
-        real_count: Number of images classified as real.
-        styles: Dict of ParagraphStyle objects.
-
-    Returns:
-        List of ReportLab flowable elements for the pie chart section.
-    """
-    story = []
-    story.append(
-        Paragraph("Distribucion de Predicciones", styles["section"])
-    )
-    story.append(
-        HRFlowable(
-            width="100%", thickness=0.5, color=SURFACE, spaceAfter=8
-        )
-    )
-
-    drawing = Drawing(400, 180)
-
-    pie_chart = Pie()
-    pie_chart.x = 100
-    pie_chart.y = 20
-    pie_chart.width = 140
-    pie_chart.height = 140
-    pie_chart.data = (
-        [ai_count, real_count] if real_count > 0 else [ai_count, 0.001]
-    )
-    pie_chart.labels = ["IA", "Real"]
-    pie_chart.slices[0].fillColor = ACCENT
-    pie_chart.slices[1].fillColor = SUCCESS
-    pie_chart.slices[0].strokeColor = DARK
-    pie_chart.slices[1].strokeColor = DARK
-    pie_chart.slices[0].strokeWidth = 1
-    pie_chart.slices[1].strokeWidth = 1
-    pie_chart.slices[0].fontColor = colors.white
-    pie_chart.slices[1].fontColor = colors.white
-    pie_chart.sideLabels = False
-    drawing.add(pie_chart)
-
-    # Manual legend
-    legend_x = 270
-    legend_y = 130
-    for i, (label, clr, count) in enumerate([
-        ("IA", ACCENT, ai_count),
-        ("Real", SUCCESS, real_count),
-    ]):
-        rect = Rect(
-            legend_x,
-            legend_y - i * 28,
-            14,
-            14,
-            fillColor=clr,
-            strokeColor=DARK,
-        )
-        drawing.add(rect)
-        txt = String(
-            legend_x + 20,
-            legend_y - i * 28 + 2,
-            f"{label}: {count}",
-            fontSize=10,
-            fillColor=colors.HexColor("#e2e8f0"),
-        )
-        drawing.add(txt)
-
-    story.append(drawing)
-    story.append(Spacer(1, 0.4 * cm))
     return story
 
 
 # ── Results table ─────────────────────────────────────────────────────────
 def _build_results_table(styles: dict, df: pd.DataFrame) -> list:
-    """Build the detailed per-image results table section.
+    """Build the detailed per-PCB results table section.
 
     Args:
         styles: Dict of ParagraphStyle objects.
@@ -399,62 +330,31 @@ def _build_results_table(styles: dict, df: pd.DataFrame) -> list:
         List of ReportLab flowable elements for the results table.
     """
     story = []
-    story.append(Paragraph("Resultados por Imagen", styles["section"]))
+    story.append(Paragraph("Resultados por PCB", styles["section"]))
     story.append(
         HRFlowable(
             width="100%", thickness=0.5, color=SURFACE, spaceAfter=8
         )
     )
 
-    headers = [
-        "#", "Archivo", "Estado", "Prediccion",
-        "P(IA)", "P(Real)", "Preproc ms", "Infer ms",
-    ]
-    col_widths = [
-        0.8 * cm, 5.5 * cm, 1.6 * cm, 2.0 * cm,
-        1.4 * cm, 1.6 * cm, 1.8 * cm, 1.6 * cm,
-    ]
+    headers = ["#", "Archivo", "Estado", "Hallazgos", "Tiempo"]
+    col_widths = [0.8 * cm, 4.5 * cm, 2.2 * cm, 7.0 * cm, 2.0 * cm]
 
     rows = [headers]
     for i, row in df.iterrows():
-        filename = str(row.get("filename", ""))
-        if len(filename) > 32:
-            filename = filename[:30] + "..."
+        filename = str(row.get("Nombre Archivo", ""))
+        if len(filename) > 38:
+            filename = filename[:36] + "..."
 
-        status = str(row.get("status", ""))
-        pred = (
-            str(row.get("predicted_label", ""))
-            if row.get("predicted_label")
-            else "-"
-        )
-        prob_ai_val = row.get("prob_ai")
-        p_ai = (
-            f'{float(row["prob_ai"]):.2f}'
-            if prob_ai_val is not None and str(prob_ai_val) != "None"
-            else "-"
-        )
-        prob_real_val = row.get("prob_real")
-        p_real = (
-            f'{float(row["prob_real"]):.2f}'
-            if prob_real_val is not None and str(prob_real_val) != "None"
-            else "-"
-        )
-        pre_val = row.get("preprocess_time_ms")
-        pre_ms = str(pre_val) if pre_val is not None else "-"
-        inf_val = row.get("inference_time_ms")
-        inf_ms = str(inf_val) if inf_val is not None else "-"
+        estado = str(row.get("Estado", ""))
+        hallazgos = str(row.get("Hallazgos", ""))
+        if len(hallazgos) > 60:
+            hallazgos = hallazgos[:58] + "..."
+        tiempo = str(row.get("Tiempo Inferencia", "-"))
 
-        rows.append(
-            [str(int(i) + 1), filename, status, pred,
-             p_ai, p_real, pre_ms, inf_ms]
-        )
+        rows.append([str(int(i) + 1), filename, estado, hallazgos, tiempo])
 
     tbl = Table(rows, colWidths=col_widths, repeatRows=1)
-
-    row_colors = []
-    for idx in range(1, len(rows)):
-        bg = SURFACE if idx % 2 == 1 else DARK
-        row_colors.append(("BACKGROUND", (0, idx), (-1, idx), bg))
 
     style_cmds = [
         ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
@@ -466,6 +366,7 @@ def _build_results_table(styles: dict, df: pd.DataFrame) -> list:
         ("FONTSIZE", (0, 1), (-1, -1), 7.5),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("ALIGN", (1, 1), (1, -1), "LEFT"),
+        ("ALIGN", (3, 1), (3, -1), "LEFT"),
         ("TOPPADDING", (0, 0), (-1, -1), 6),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ("BOX", (0, 0), (-1, -1), 0.5, ACCENT),
@@ -473,28 +374,154 @@ def _build_results_table(styles: dict, df: pd.DataFrame) -> list:
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [SURFACE, DARK]),
     ]
 
-    # Color error rows in soft red, highlight prediction labels
     for idx, row in enumerate(rows[1:], start=1):
-        if row[2] == "error":
+        if row[2] == "Rechazado":
             style_cmds.append(("TEXTCOLOR", (2, idx), (2, idx), ERROR_COLOR))
-        elif row[2] == "ok":
+        elif row[2] == "Aprobado":
             style_cmds.append(("TEXTCOLOR", (2, idx), (2, idx), SUCCESS))
-        if row[3] == "ai":
-            style_cmds.append(("TEXTCOLOR", (3, idx), (3, idx), ACCENT))
-        elif row[3] == "real":
-            style_cmds.append(("TEXTCOLOR", (3, idx), (3, idx), SUCCESS))
 
     tbl.setStyle(TableStyle(style_cmds))
     story.append(tbl)
     return story
 
 
-# ── Public entry point ────────────────────────────────────────────────────
-def build_pdf_bytes(df: pd.DataFrame) -> bytes:
-    """Generate the PDF report and return the bytes ready for download.
+# ── Processed images gallery ──────────────────────────────────────────────
+def _build_images_gallery(
+    styles: dict,
+    batch_items: Optional[List[Any]],
+) -> list:
+    """Build the processed PCB images gallery section.
+
+    Embeds the annotated images (with bounding boxes) from the session state
+    so the technician can spatially locate each defect.
 
     Args:
-        df: Results DataFrame with one row per analyzed image.
+        styles: Dict of ParagraphStyle objects.
+        batch_items: List of BatchImage instances from session state,
+            or None if not available.
+
+    Returns:
+        List of ReportLab flowable elements for the images section.
+    """
+    if not batch_items:
+        return []
+
+    done_items = [
+        it for it in batch_items
+        if getattr(it, "status", None) == "done"
+        and getattr(it, "processed_image_base64", None)
+    ]
+
+    if not done_items:
+        return []
+
+    story = []
+    story.append(PageBreak())
+    story.append(Paragraph("Galería de PCBs Inspeccionadas", styles["section"]))
+    story.append(
+        HRFlowable(
+            width="100%", thickness=0.5, color=SURFACE, spaceAfter=8
+        )
+    )
+    story.append(
+        Paragraph(
+            "Las imágenes procesadas muestran las detecciones del modelo "
+            "YOLOv8 con bounding boxes indicando la ubicación espacial "
+            "de cada defecto detectado.",
+            styles["body"],
+        )
+    )
+    story.append(Spacer(1, 0.4 * cm))
+
+    page_width = A4[0] - 3.6 * cm  # total usable width
+    img_width = (page_width - 0.5 * cm) / 2  # two images per row
+    img_height = img_width * 0.75  # 4:3 ratio
+
+    for item in done_items:
+        story.append(
+            Paragraph(f"<b>{item.filename}</b>", styles["body"])
+        )
+
+        row_data = []
+        captions = []
+
+        # Original image
+        if getattr(item, "content", None):
+            try:
+                orig_buf = io.BytesIO(item.content)
+                rl_orig = RLImage(orig_buf, width=img_width, height=img_height)
+                row_data.append(rl_orig)
+                captions.append("Imagen Original")
+            except Exception:
+                row_data.append(Paragraph("[ sin imagen ]", styles["img_caption"]))
+                captions.append("Imagen Original")
+        else:
+            row_data.append(Paragraph("[ sin imagen ]", styles["img_caption"]))
+            captions.append("Imagen Original")
+
+        # Processed image (with bounding boxes)
+        try:
+            proc_bytes = base64.b64decode(item.processed_image_base64)
+            proc_buf = io.BytesIO(proc_bytes)
+            rl_proc = RLImage(proc_buf, width=img_width, height=img_height)
+            row_data.append(rl_proc)
+            captions.append("Imagen Procesada (Defectos)")
+        except Exception:
+            row_data.append(Paragraph("[ sin imagen procesada ]", styles["img_caption"]))
+            captions.append("Imagen Procesada (Defectos)")
+
+        img_table = Table(
+            [row_data, [Paragraph(c, styles["img_caption"]) for c in captions]],
+            colWidths=[img_width, img_width],
+        )
+        img_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), DARK),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(img_table)
+
+        # Defect findings
+        has_defects = getattr(item, "has_defects", None)
+        defects_summary = getattr(item, "defects_summary", None) or []
+        if has_defects is False:
+            story.append(
+                Paragraph(
+                    "✓ PCB en estado óptimo. Ausencia de defectos.",
+                    styles["body"],
+                )
+            )
+        elif defects_summary:
+            findings = ", ".join(
+                f"{d['class']} (conf: {d['confidence']:.2f})"
+                for d in defects_summary
+            )
+            story.append(
+                Paragraph(
+                    f"⚠ Defectos detectados: {findings}",
+                    styles["body"],
+                )
+            )
+
+        story.append(Spacer(1, 0.6 * cm))
+
+    return story
+
+
+# ── Public entry point ────────────────────────────────────────────────────
+def build_pdf_bytes(
+    df: pd.DataFrame,
+    batch_items: Optional[List[Any]] = None,
+) -> bytes:
+    """Generate the PCB inspection PDF report and return the bytes.
+
+    Args:
+        df: Results DataFrame with one row per analyzed PCB.
+        batch_items: Optional list of BatchImage instances from session_state.
+            When provided, the PDF will include the processed images gallery
+            so the technician can spatially locate each defect.
 
     Returns:
         Bytes of the generated PDF document.
@@ -517,6 +544,7 @@ def build_pdf_bytes(df: pd.DataFrame) -> bytes:
     story.extend(_build_summary(styles, df))
     story.append(PageBreak())
     story.extend(_build_results_table(styles, df))
+    story.extend(_build_images_gallery(styles, batch_items))
 
     doc.build(
         story,

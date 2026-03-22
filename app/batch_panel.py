@@ -3,6 +3,7 @@
 This module provides UI components to render the status of batch
 image processing, including thumbnails, predictions, and error states.
 """
+import base64
 import io
 from typing import List
 
@@ -110,22 +111,20 @@ def _render_single(item: BatchImage) -> None:
         if item.status == "error" and item.error_message:
             st.error(item.error_message)
         elif item.status == "done":
-            if item.predicted_label:
-                label = (
-                    "Generada por IA"
-                    if item.predicted_label == "ai"
-                    else "Imagen Real"
-                )
+            if item.has_defects is not None:
+                estado = "Defectos detectados" if item.has_defects else "Sin defectos"
                 st.markdown(
                     f'<div class="single-meta">'
-                    f'Prediccion: <b>{label}</b></div>',
+                    f'Estado: <b>{estado}</b></div>',
                     unsafe_allow_html=True,
                 )
-            if item.prob_ai is not None and item.prob_real is not None:
+            if item.defects_summary:
+                defects_str = ", ".join(
+                    d["class"] for d in item.defects_summary
+                )
                 st.markdown(
                     f'<div class="single-meta">'
-                    f'P(IA): {item.prob_ai:.2f} &nbsp;|&nbsp; '
-                    f'P(Real): {item.prob_real:.2f}</div>',
+                    f'Hallazgos: <b>{defects_str}</b></div>',
                     unsafe_allow_html=True,
                 )
             if item.inference_time_ms is not None:

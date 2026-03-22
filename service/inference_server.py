@@ -1,226 +1,139 @@
-"""gRPC inference server with real model inference.
+"""Servidor FastAPI para detección de defectos en PCB - Flux Solutions Cali.
 
-Replaces the mock servicer with a real inference pipeline:
-- Loads AutoModelForImageClassification + AutoImageProcessor at startup
-- Delegates to run_inference() from service.inference.inference_engine
-- Maps result scores to prob_ai / prob_human fields
-- Returns ERROR status with error_message on inference failure (no crash)
+Expone un endpoint POST /predict que recibe una imagen y retorna el resultado
+de la detección de defectos usando el modelo YOLOv8.
+
+Simula un Endpoint de Azure Machine Learning con una API REST estándar.
 
 Env vars:
-    HF_MODEL_ID      - HuggingFace model ID
-                       (default: Ateeqq/ai-vs-human-image-detector)
-    GRPC_LOG_LEVEL   - Logging level (default: INFO)
-    GRPC_SERVER_HOST - Server host (default: localhost)
-    GRPC_SERVER_PORT - Server port (default: 50051)
+    HF_MODEL_ID  - ID del modelo en Hugging Face
+                   (default: keremberke/yolov8n-pcb-defect-segmentation)
+    LOG_LEVEL    - Nivel de logging (default: INFO)
+    API_HOST     - Host del servidor (default: 0.0.0.0)
+    API_PORT     - Puerto del servidor (default: 8000)
 
-Usage:
-    uv run python -m service.inference_server
+Uso:
+    uv run service/inference_server.py
+    o:
+    make api-server
 """
+
 import logging
 import os
-import sys
-from concurrent import futures
+from typing import Any, Dict, List
 
-import grpc
+import uvicorn
 from dotenv import load_dotenv
-from transformers import AutoImageProcessor, AutoModelForImageClassification
+from fastapi import FastAPI, File, UploadFile
+from pydantic import BaseModel
 
-# Add proto/generated to path so gRPC stubs can be imported
-sys.path.insert(
-    0,
-    os.path.join(os.path.dirname(__file__), '..', 'proto', 'generated'),
-)
-
-import inference_pb2  # noqa: E402
-import inference_pb2_grpc  # noqa: E402
-
-from inference.inference_engine import run_inference  # noqa: E402
+from inference.inference_engine import get_model, run_inference
 
 load_dotenv()
 
-LOG_LEVEL = os.getenv('GRPC_LOG_LEVEL', 'INFO')
-GRPC_SERVER_HOST = os.getenv('GRPC_SERVER_HOST', '0.0.0.0')
-GRPC_SERVER_PORT = int(os.getenv('GRPC_SERVER_PORT', '50051'))
-HF_MODEL_ID = os.getenv('HF_MODEL_ID', 'Ateeqq/ai-vs-human-image-detector')
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "8000"))
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
-    format='%(asctime)s [%(levelname)s] %(message)s',
+    format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
 
+app = FastAPI(
+    title="PCB Defect Detection API - Flux Solutions Cali",
+    description=(
+        "API REST para inspección de calidad de PCB mediante visión artificial. "
+        "Detecta defectos como Dry_joint, Incorrect_installation, PCB_damage, "
+        "Short_circuit, Mousebites y Opens usando YOLOv8."
+    ),
+    version="2.0.0",
+)
 
-class AiVsRealClassifierServicer(
-    inference_pb2_grpc.AiVsRealClassifierServicer
-):
-    """gRPC servicer that performs real model inference using HuggingFace."""
-
-    def __init__(self, model=None, processor=None):
-        """Load model and processor at startup (injectable for tests).
-
-        Args:
-            model: Pre-loaded model. If None, loads from HF_MODEL_ID.
-            processor: Pre-loaded processor. If None, loads from HF_MODEL_ID.
-        """
-        if model is not None and processor is not None:
-            self.model = model
-            self.processor = processor
-            logger.info('Using injected model and processor.')
-        else:
-            logger.info(
-                'Loading model and processor from HuggingFace: %s',
-                HF_MODEL_ID,
-            )
-            self.processor = AutoImageProcessor.from_pretrained(
-                HF_MODEL_ID
-            )
-            self.model = AutoModelForImageClassification.from_pretrained(
-                HF_MODEL_ID
-            )
-            logger.info('Model and processor loaded successfully.')
-
-    def ClassifyImage(self, request, context):
-        logger.info(
-            'Received ClassifyImage request: image_id=%s filename=%s',
-            request.image_id,
-            request.filename,
-        )
-
-        # Do not process requests cancelled by the client.
-        if not context.is_active():
-            logger.warning(
-                'Request cancelled before processing: image_id=%s',
-                request.image_id,
-            )
-            context.abort(
-                grpc.StatusCode.CANCELLED,
-                'Request was cancelled by the client before processing.',
-            )
-            return inference_pb2.ClassificationResponse()
-
-        try:
-            result = run_inference(
-                request.image_data, self.model, self.processor
-            )
-        except Exception as exc:
-            # Unexpected error in the inference pipeline: report INTERNAL.
-            # Use context.set_code so the client receives a gRPC error.
-            logger.exception(
-                'Unexpected error during inference for image_id=%s: %s',
-                request.image_id,
-                exc,
-            )
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f'Error interno inesperado: {exc}')
-            return inference_pb2.ClassificationResponse(
-                image_id=request.image_id,
-                status=inference_pb2.ERROR,
-                error_message=f'Error interno inesperado: {exc}',
-            )
-
-        if result['status'] == 'error':
-            error_msg = result['error']['message']
-            error_code = result['error'].get('code', 'UNKNOWN')
-            logger.warning(
-                'Inference error for image_id=%s code=%s: %s',
-                request.image_id,
-                error_code,
-                error_msg,
-            )
-            # Application-level error (e.g. corrupt image): return an ERROR
-            # ClassificationResponse so the client can inspect the message.
-            # We do NOT set a gRPC error code here because the server responded
-            # successfully at the protocol level; only the image was invalid.
-            return inference_pb2.ClassificationResponse(
-                image_id=request.image_id,
-                status=inference_pb2.ERROR,
-                predicted_label='',
-                confidence=0.0,
-                prob_ai=0.0,
-                prob_human=0.0,
-                metrics=inference_pb2.PerformanceMetrics(
-                    preprocess_time_ms=0,
-                    inference_time_ms=0,
-                    total_time_ms=0,
-                ),
-                error_message=error_msg,
-            )
-
-        # Map scores dict to proto fields - normalize label keys
-        scores = {k.lower(): v for k, v in result['scores'].items()}
-        prob_ai = float(scores.get('ai', 0.0))
-        # The model may return 'human' or the shorter alias 'hum'
-        # for the real/human class; check both keys.
-        prob_human_val = (
-            scores.get('human')
-            if 'human' in scores
-            else scores.get('hum', 0.0)
-        )
-        prob_human = float(prob_human_val)
-
-        # Confidence = score of winning class
-        predicted_label = result['label'].lower()
-        confidence = float(scores.get(predicted_label, 0.0))
-
-        timing = result['timing']
-        metrics = inference_pb2.PerformanceMetrics(
-            preprocess_time_ms=int(timing['preprocessing_ms']),
-            inference_time_ms=int(timing['inference_ms']),
-            total_time_ms=int(timing['total_ms']),
-        )
-
-        logger.info(
-            'ClassifyImage OK: image_id=%s label=%s confidence=%.4f',
-            request.image_id,
-            predicted_label,
-            confidence,
-        )
-
-        return inference_pb2.ClassificationResponse(
-            image_id=request.image_id,
-            status=inference_pb2.OK,
-            predicted_label=predicted_label,
-            confidence=confidence,
-            prob_ai=prob_ai,
-            prob_human=prob_human,
-            metrics=metrics,
-            error_message='',
-        )
+_model: Any = None
 
 
-def serve(host=None, port=None, model=None, processor=None):
-    """Start the gRPC server.
+@app.on_event("startup")
+async def startup_event() -> None:
+    """Carga el modelo YOLO al iniciar el servidor."""
+    global _model
+    logger.info("Cargando modelo de detección de defectos en PCB...")
+    _model = get_model()
+    logger.info("Servidor listo para recibir peticiones.")
+
+
+class DetectionResponse(BaseModel):
+    """Respuesta estándar del endpoint /predict."""
+
+    status: str
+    processed_image_base64: str
+    has_defects: bool
+    defects_summary: List[Dict[str, Any]]
+    error_message: str = ""
+
+
+@app.post("/predict", response_model=DetectionResponse)
+async def predict(file: UploadFile = File(...)) -> DetectionResponse:
+    """Detecta defectos en una imagen PCB.
+
+    Recibe una imagen JPG/PNG, ejecuta el modelo YOLOv8 de detección de
+    defectos y retorna la imagen procesada (con bounding boxes) codificada
+    en Base64, junto al resumen de defectos encontrados.
 
     Args:
-        host: Server host (default from env).
-        port: Server port (default from env).
-        model: Optional pre-loaded model for testing (bypasses HF download).
-        processor: Optional pre-loaded processor for testing.
+        file: Imagen JPG o PNG de la PCB a inspeccionar.
+
+    Returns:
+        DetectionResponse con la imagen procesada en Base64, indicador de
+        defectos y lista de hallazgos con clase y confianza.
     """
-    host = host or GRPC_SERVER_HOST
-    port = port or GRPC_SERVER_PORT
+    if _model is None:
+        logger.error("Modelo no disponible al recibir petición /predict")
+        return DetectionResponse(
+            status="error",
+            processed_image_base64="",
+            has_defects=False,
+            defects_summary=[],
+            error_message="El modelo no está disponible. El servidor aún puede estar inicializando.",
+        )
 
-    servicer = AiVsRealClassifierServicer(model=model, processor=processor)
+    logger.info("Recibida petición /predict para archivo: %s", file.filename)
+    image_bytes = await file.read()
 
-    # 50 MB limit to handle large image payloads without RESOURCE_EXHAUSTED.
-    _MAX_MSG_BYTES = 50 * 1024 * 1024
-    server = grpc.server(
-        futures.ThreadPoolExecutor(max_workers=10),
-        options=[
-            ("grpc.max_send_message_length", _MAX_MSG_BYTES),
-            ("grpc.max_receive_message_length", _MAX_MSG_BYTES),
-        ],
+    result = run_inference(image_bytes, _model)
+
+    if result["status"] == "error":
+        logger.warning("Error en inferencia: %s", result.get("error"))
+        return DetectionResponse(
+            status="error",
+            processed_image_base64="",
+            has_defects=False,
+            defects_summary=[],
+            error_message=result.get("error", "Error desconocido"),
+        )
+
+    logger.info(
+        "Inferencia OK: has_defects=%s, defectos=%d, inference_ms=%.1f",
+        result["has_defects"],
+        len(result["defects_summary"]),
+        result["timing"]["inference_ms"],
     )
-    inference_pb2_grpc.add_AiVsRealClassifierServicer_to_server(
-        servicer, server
+
+    return DetectionResponse(
+        status="ok",
+        processed_image_base64=result["processed_image_base64"],
+        has_defects=result["has_defects"],
+        defects_summary=result["defects_summary"],
+        error_message="",
     )
-    address = f'{host}:{port}'
-    server.add_insecure_port(address)
-    server.start()
-    logger.info('gRPC server started on port %d', port)
-    return server
 
 
-if __name__ == '__main__':
-    server = serve()
-    server.wait_for_termination()
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host=API_HOST,
+        port=API_PORT,
+        log_level=LOG_LEVEL.lower(),
+    )
+
