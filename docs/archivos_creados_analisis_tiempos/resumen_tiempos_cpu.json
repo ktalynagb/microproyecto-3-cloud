@@ -1,0 +1,337 @@
+{
+  "total_requests": 10,
+  "ok_requests": 10,
+  "error_requests": 0,
+  "preprocess_time_ms": {
+    "avg": 28,
+    "min": 8,
+    "max": 45
+  },
+  "inference_time_ms": {
+    "avg": 625.1,
+    "min": 576,
+    "max": 655
+  },
+  "server_total_time_ms": {
+    "avg": 653.5,
+    "min": 585,
+    "max": 696
+  },
+  "client_round_trip_time_ms": {
+    "avg": 657.657,
+    "min": 588.615,
+    "max": 699.647
+  },
+  "images": [
+    {
+      "image_name": "IA1.jpg",
+      "file_size_bytes": 317226,
+      "width_px": 1067,
+      "height_px": 1690,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "ai"
+      ],
+      "preprocess_time_ms": {
+        "avg": 42,
+        "min": 42,
+        "max": 42
+      },
+      "inference_time_ms": {
+        "avg": 647,
+        "min": 647,
+        "max": 647
+      },
+      "server_total_time_ms": {
+        "avg": 689,
+        "min": 689,
+        "max": 689
+      },
+      "client_round_trip_time_ms": {
+        "avg": 694.293,
+        "min": 694.293,
+        "max": 694.293
+      }
+    },
+    {
+      "image_name": "IA2.jpg",
+      "file_size_bytes": 156484,
+      "width_px": 1800,
+      "height_px": 1200,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "ai"
+      ],
+      "preprocess_time_ms": {
+        "avg": 40,
+        "min": 40,
+        "max": 40
+      },
+      "inference_time_ms": {
+        "avg": 655,
+        "min": 655,
+        "max": 655
+      },
+      "server_total_time_ms": {
+        "avg": 696,
+        "min": 696,
+        "max": 696
+      },
+      "client_round_trip_time_ms": {
+        "avg": 699.647,
+        "min": 699.647,
+        "max": 699.647
+      }
+    },
+    {
+      "image_name": "IA3.jpg",
+      "file_size_bytes": 51777,
+      "width_px": 750,
+      "height_px": 450,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "ai"
+      ],
+      "preprocess_time_ms": {
+        "avg": 9,
+        "min": 9,
+        "max": 9
+      },
+      "inference_time_ms": {
+        "avg": 630,
+        "min": 630,
+        "max": 630
+      },
+      "server_total_time_ms": {
+        "avg": 640,
+        "min": 640,
+        "max": 640
+      },
+      "client_round_trip_time_ms": {
+        "avg": 645.788,
+        "min": 645.788,
+        "max": 645.788
+      }
+    },
+    {
+      "image_name": "IA4.jpg",
+      "file_size_bytes": 76450,
+      "width_px": 750,
+      "height_px": 362,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "ai"
+      ],
+      "preprocess_time_ms": {
+        "avg": 8,
+        "min": 8,
+        "max": 8
+      },
+      "inference_time_ms": {
+        "avg": 576,
+        "min": 576,
+        "max": 576
+      },
+      "server_total_time_ms": {
+        "avg": 585,
+        "min": 585,
+        "max": 585
+      },
+      "client_round_trip_time_ms": {
+        "avg": 588.615,
+        "min": 588.615,
+        "max": 588.615
+      }
+    },
+    {
+      "image_name": "IA5.jpg",
+      "file_size_bytes": 38720,
+      "width_px": 512,
+      "height_px": 512,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "ai"
+      ],
+      "preprocess_time_ms": {
+        "avg": 10,
+        "min": 10,
+        "max": 10
+      },
+      "inference_time_ms": {
+        "avg": 606,
+        "min": 606,
+        "max": 606
+      },
+      "server_total_time_ms": {
+        "avg": 616,
+        "min": 616,
+        "max": 616
+      },
+      "client_round_trip_time_ms": {
+        "avg": 619.433,
+        "min": 619.433,
+        "max": 619.433
+      }
+    },
+    {
+      "image_name": "Polar.jpg",
+      "file_size_bytes": 61146,
+      "width_px": 1280,
+      "height_px": 720,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "hum"
+      ],
+      "preprocess_time_ms": {
+        "avg": 26,
+        "min": 26,
+        "max": 26
+      },
+      "inference_time_ms": {
+        "avg": 591,
+        "min": 591,
+        "max": 591
+      },
+      "server_total_time_ms": {
+        "avg": 617,
+        "min": 617,
+        "max": 617
+      },
+      "client_round_trip_time_ms": {
+        "avg": 620.727,
+        "min": 620.727,
+        "max": 620.727
+      }
+    },
+    {
+      "image_name": "Reall1.jpg",
+      "file_size_bytes": 63030,
+      "width_px": 720,
+      "height_px": 1280,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "hum"
+      ],
+      "preprocess_time_ms": {
+        "avg": 30,
+        "min": 30,
+        "max": 30
+      },
+      "inference_time_ms": {
+        "avg": 635,
+        "min": 635,
+        "max": 635
+      },
+      "server_total_time_ms": {
+        "avg": 666,
+        "min": 666,
+        "max": 666
+      },
+      "client_round_trip_time_ms": {
+        "avg": 669.957,
+        "min": 669.957,
+        "max": 669.957
+      }
+    },
+    {
+      "image_name": "Reall2.jpg",
+      "file_size_bytes": 118620,
+      "width_px": 720,
+      "height_px": 1280,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "hum"
+      ],
+      "preprocess_time_ms": {
+        "avg": 35,
+        "min": 35,
+        "max": 35
+      },
+      "inference_time_ms": {
+        "avg": 621,
+        "min": 621,
+        "max": 621
+      },
+      "server_total_time_ms": {
+        "avg": 656,
+        "min": 656,
+        "max": 656
+      },
+      "client_round_trip_time_ms": {
+        "avg": 659.303,
+        "min": 659.303,
+        "max": 659.303
+      }
+    },
+    {
+      "image_name": "Reall3.jpg",
+      "file_size_bytes": 103316,
+      "width_px": 720,
+      "height_px": 1280,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "hum"
+      ],
+      "preprocess_time_ms": {
+        "avg": 35,
+        "min": 35,
+        "max": 35
+      },
+      "inference_time_ms": {
+        "avg": 647,
+        "min": 647,
+        "max": 647
+      },
+      "server_total_time_ms": {
+        "avg": 682,
+        "min": 682,
+        "max": 682
+      },
+      "client_round_trip_time_ms": {
+        "avg": 686.696,
+        "min": 686.696,
+        "max": 686.696
+      }
+    },
+    {
+      "image_name": "Reall4.jpg",
+      "file_size_bytes": 231534,
+      "width_px": 720,
+      "height_px": 1280,
+      "requests": 1,
+      "ok_requests": 1,
+      "predicted_labels": [
+        "hum"
+      ],
+      "preprocess_time_ms": {
+        "avg": 45,
+        "min": 45,
+        "max": 45
+      },
+      "inference_time_ms": {
+        "avg": 643,
+        "min": 643,
+        "max": 643
+      },
+      "server_total_time_ms": {
+        "avg": 688,
+        "min": 688,
+        "max": 688
+      },
+      "client_round_trip_time_ms": {
+        "avg": 692.106,
+        "min": 692.106,
+        "max": 692.106
+      }
+    }
+  ]
+}

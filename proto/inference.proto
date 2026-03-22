@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package inference;
+
+enum ResultStatus {
+  RESULT_STATUS_UNSPECIFIED = 0;
+  OK = 1;
+  ERROR = 2;
+}
+
+message ImageRequest {
+  string image_id = 1; // id único por imagen en el lote
+  string filename = 2; // nombre original del archivo
+  bytes image_data = 3; // bytes de JPG/PNG
+}
+
+message PerformanceMetrics {
+  int64 preprocess_time_ms = 1;
+  int64 inference_time_ms = 2;
+  int64 total_time_ms = 3;
+}
+
+message ClassificationResponse {
+  string image_id = 1;
+  ResultStatus status = 2;
+  string predicted_label = 3; // ej: "ai" o "human"
+  float confidence = 4; // prob de la clase ganadora
+  float prob_ai = 5; // prob clase ai
+  float prob_human = 6; // prob clase human
+  PerformanceMetrics metrics = 7; // tiempos
+  string error_message = 8; // solo si status=ERROR
+}
+
+service AiVsRealClassifier {
+  rpc ClassifyImage(ImageRequest) returns (ClassificationResponse);
+}

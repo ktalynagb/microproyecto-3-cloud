@@ -1,0 +1,43 @@
+[project]
+name = "imageaivsreal"
+version = "0.1.0"
+description = "Aplicación web en Streamlit para clasificar imágenes como generadas por IA o reales."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    # --- Interfaz web ---
+    "streamlit>=1.45.0",
+    # --- Inferencia / Modelos IA ---
+    "transformers>=4.52.0",
+    "torch>=2.7.0",
+    "accelerate>=1.7.0",
+    # --- Procesamiento de imágenes y datos ---
+    "Pillow>=11.2.1",
+    "pandas>=2.2.3",
+    "reportlab>=4.2.0",
+    # --- gRPC (comunicación cliente-servidor) ---
+    "grpcio>=1.78.0",
+    "grpcio-tools>=1.78.0,<1.79",
+    "protobuf>=6.31.1,<7.0",
+    "mlflow>=3.10.0",
+
+    # --- Configuración ---
+    "python-dotenv>=1.0.0",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.11'",
+    ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "pytest-cov>=6.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.uv]
+package = false
