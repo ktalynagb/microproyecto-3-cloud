@@ -58,8 +58,16 @@ def get_model() -> Any:
                     "HF_MODEL_ID",
                     "keremberke/yolov8n-pcb-defect-segmentation",
                 )
-                logger.info("Cargando modelo YOLO: %s", hf_model_id)
-                _model = YOLO(hf_model_id)
+                logger.info("Cargando modelo YOLO desde Hugging Face: %s", hf_model_id)
+                try:
+                    from huggingface_hub import hf_hub_download
+
+                    # Intentamos descargar el archivo .pt del repositorio de Hugging Face
+                    model_path = hf_hub_download(repo_id=hf_model_id, filename="best.pt")
+                    _model = YOLO(model_path)
+                except Exception as e:
+                    logger.warning("No se pudo descargar de HF Hub (%s), reintentando carga directa...", e)
+                    _model = YOLO(hf_model_id)
                 logger.info("Modelo YOLO cargado correctamente.")
     return _model
 

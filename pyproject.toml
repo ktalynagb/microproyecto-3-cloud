@@ -21,7 +21,8 @@ dependencies = [
     "reportlab>=4.2.0",
     # --- Configuración ---
     "python-dotenv>=1.0.0",
-    ]
+    "huggingface-hub>=1.7.2",
+]
 
 [dependency-groups]
 dev = [
@@ -29,6 +30,5 @@ dev = [
     "pytest-cov>=6.1.0",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+packages = ["src/pcb_defect_inspection"]
