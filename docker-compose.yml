@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile-api
+    ports:
+      - "8000:8000"
+    environment:
+      - HF_MODEL_ID=keremberke/yolov8n-pcb-defect-segmentation
+      - LOG_LEVEL=INFO
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile-gui
+    ports:
+      - "8501:8501"
+    environment:
+      - API_HOST=backend
+      - API_PORT=8000
+      - API_TIMEOUT=30
