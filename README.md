@@ -13,7 +13,7 @@ ENV_APP="${APP_NAME}-env"
 ACR_NAME="uaopcbdefect"
 ```
 
-Ahora crearemos la infraestructura base para el Frontend. Asegúrate de ejecutar estos comandos desde el directorio donde se encuentra el Dockerfile-gui. Primero, creamos el grupo de recursos, el registro de contenedores y extraemos las credenciales de acceso:
+Ahora crearemos la infraestructura base para el Frontend. Asegúrate de ejecutar estos comandos desde el directorio donde se encuentra el Dockerfile. Primero, creamos el grupo de recursos, el registro de contenedores y extraemos las credenciales de acceso:
 
 ```bash
 az group create --name $RG_APP --location $LOCATION
@@ -27,7 +27,7 @@ A continuación, construimos la imagen de Docker y desplegamos el entorno y la a
 
 ```bash
 az acr login -n $ACR_USER
-docker build -t $APP_NAME:latest -f Dockerfile-gui .
+docker build -t $APP_NAME:latest -f Dockerfile .
 docker tag $APP_NAME:latest $ACR_SERVER/$APP_NAME:latest
 docker push $ACR_SERVER/$APP_NAME:latest
 az acr repository list --name $ACR_NAME --output table
@@ -48,12 +48,12 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ECR_URI="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${APP_NAME}"
 ```
 
-Asegúrate de estar en el directorio donde se ubica el Dockerfile-gui. Ejecuta estos comandos para crear el repositorio, autenticar Docker y subir la imagen.
+Asegúrate de estar en el directorio donde se ubica el Dockerfile. Ejecuta estos comandos para crear el repositorio, autenticar Docker y subir la imagen.
 
 ```bash
 aws ecr create-repository --repository-name $APP_NAME --region $REGION
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
-docker build -t $APP_NAME -f Dockerfile-gui .
+docker build -t $APP_NAME -f Dockerfile .
 docker tag "${APP_NAME}:latest" "${ECR_URI}:latest"
 docker push "${ECR_URI}:latest"
 ```

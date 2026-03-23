@@ -14,7 +14,7 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: Dockerfile-gui
+      dockerfile: Dockerfile
     ports:
       - "8501:8501"
     environment:
