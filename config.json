@@ -1,0 +1,5 @@
+{
+  "subscription_id": "ID_DE_SUSCRIPCION",
+  "resource_group": "GRUPO_DE_RECURSOS",
+  "workspace_name": "WORKSPACE_DE_AZURE_ML"
+}

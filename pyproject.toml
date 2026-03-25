@@ -22,6 +22,10 @@ dependencies = [
     # --- Configuración ---
     "python-dotenv>=1.0.0",
     "huggingface-hub>=1.7.2",
+    "azure-ai-ml>=1.32.0",
+    "azure-identity>=1.25.3",
+    "boto3>=1.42.75",
+    "sagemaker>=3.6.0",
 ]
 
 [dependency-groups]

@@ -1,0 +1,14 @@
+name: pcb-azure-env
+channels:
+  - conda-forge
+  - default
+dependencies:
+  - python=3.11
+  - pip:
+      - azure-ai-ml
+      - azure-identity
+      - ultralytics
+      - opencv-python-headless
+      - pandas
+      - mlflow
+      - azureml-mlflow
