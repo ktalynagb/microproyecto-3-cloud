@@ -57,7 +57,7 @@ _BATCH_INFERENCE_DIR = Path(__file__).resolve().parent / "batch_inference"
 # ── Constantes ────────────────────────────────────────────────────────────
 COMPUTE_NAME = "cpu-cluster-ds3"
 ENVIRONMENT_NAME = "pcb-yolo-env"
-ENVIRONMENT_VERSION = "7"
+ENVIRONMENT_VERSION = "8"
 
 # Nombre del modelo registrado en Azure ML Model Registry
 MODEL_NAME = "pcb-yolov8n"

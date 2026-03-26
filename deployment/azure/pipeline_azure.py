@@ -51,7 +51,7 @@ _BATCH_INFERENCE_DIR = Path(__file__).resolve().parent / "batch_inference"
 # ── Constantes del pipeline ──────────────────────────────────────────────
 COMPUTE_NAME = "cpu-cluster-ds3"
 ENVIRONMENT_NAME = "pcb-yolo-env"
-ENVIRONMENT_VERSION = "7"
+ENVIRONMENT_VERSION = "8"
 PIPELINE_NAME = "pcb-defect-pipeline"
 EXPERIMENT_NAME = "pcb-defect-yolov8-finetuning"
 
