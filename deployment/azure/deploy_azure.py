@@ -26,9 +26,9 @@ except Exception:
         name=cpu_compute_name,
         type="amlcompute",
         size="STANDARD_DS3_V2", 
-        min_instances=0,     
+        min_instances=1,     
         max_instances=2,
-        idle_time_before_scale_down=120, # Se apaga tras 2 min de inactividad
+        idle_time_before_scale_down=1000, 
     )
     ml_client.compute.begin_create_or_update(cpu_cluster).result()
     print("Clúster creado con éxito.")
