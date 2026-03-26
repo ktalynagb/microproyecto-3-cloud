@@ -3,6 +3,8 @@
 This module defines the data structures and classes for managing a batch
 of images in the Streamlit session state, including upload handling,
 deduplication, and basic validation.
+
+Batch limit: maximum 10 images per batch (1 request/min enforced by the UI).
 """
 import uuid
 from dataclasses import dataclass
@@ -11,6 +13,7 @@ from typing import Any, Dict, List, Literal, Optional
 import streamlit as st
 
 
+MAX_BATCH_SIZE = 10  # Máximo de imágenes por lote (Batch Processing)
 Status = Literal["pending", "processing", "done", "error"]
 
 
@@ -81,6 +84,13 @@ class BatchStore:
         existing_keys = {(x.filename, len(x.content)) for x in self.items()}
 
         for f in uploaded_files:
+            if len(self.items()) >= MAX_BATCH_SIZE:
+                st.warning(
+                    f"⚠️ Límite de lote alcanzado: máximo {MAX_BATCH_SIZE} "
+                    "imágenes por análisis. Las imágenes adicionales no se "
+                    "agregaron al lote."
+                )
+                break
             try:
                 content = f.getvalue()
                 if not content:
@@ -146,7 +156,7 @@ class BatchUploader:
         """Render the file uploader widget and batch management controls."""
         counter = st.session_state[self._UPLOADER_COUNTER_KEY]
         uploaded_files = st.file_uploader(
-            "Sube una o varias imágenes (JPG/JPEG/PNG)",
+            f"Sube hasta {MAX_BATCH_SIZE} imágenes por lote (JPG/JPEG/PNG)",
             type=["jpg", "jpeg", "png"],
             accept_multiple_files=True,
             key=f"file_uploader_{counter}",

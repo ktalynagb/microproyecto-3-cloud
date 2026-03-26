@@ -1,5 +1,6 @@
 {
-  "subscription_id": "ID_DE_SUSCRIPCION",
-  "resource_group": "GRUPO_DE_RECURSOS",
-  "workspace_name": "WORKSPACE_DE_AZURE_ML"
+  "subscription_id": "2a088410-37ec-472a-ae7e-09126fba02a6",
+  "resource_group": "pcb-ml-rg",
+  "workspace_name": "pcb-ml-workspace"
 }
+
