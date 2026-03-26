@@ -160,9 +160,6 @@ Solución recomendada:
 # 1. Iniciar sesión en Azure
 az login
 
-# 2. Establecer la suscripción activa
-az account set --subscription "2a088410-37ec-472a-ae7e-09126fba02a6"
-
 # 3. Instalar la extensión ml en un entorno uv aislado (evita conflictos)
 uv pip install azure-ai-ml azure-identity
 
