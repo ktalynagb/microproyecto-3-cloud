@@ -11,9 +11,8 @@ Uso como módulo:
 
 from __future__ import annotations
 
-import signal
+import threading
 import time
-import types
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,17 +63,31 @@ class BatchResult:
 
 @contextmanager
 def _timeout(seconds: int) -> Generator[None, None, None]:
-    """Context manager que lanza TimeoutError tras `seconds` segundos (Unix)."""
-    def _handler(signum: int, frame: types.FrameType | None) -> None:
-        raise TimeoutError(f"Inferencia excedió el tiempo límite de {seconds}s.")
-
-    old = signal.signal(signal.SIGALRM, _handler)
-    signal.alarm(seconds)
+    """✅ ARREGLADO: Context manager que simula timeout con threading.
+    
+    Funciona en cualquier contexto (incluyendo Azure ML Batch worker threads).
+    No usa signal.alarm() que solo funciona en el main thread.
+    """
+    exception = [None]
+    
+    def _raise_timeout() -> None:
+        """Levanta TimeoutError después de expirado el tiempo."""
+        exception[0] = TimeoutError(f"Inferencia excedió el tiempo límite de {seconds}s.")
+    
+    # Crear timer daemon que se ejecutará en background
+    timer = threading.Timer(seconds, _raise_timeout)
+    timer.daemon = True
+    timer.start()
+    
     try:
         yield
     finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old)
+        # Cancelar timer si aún está activo
+        timer.cancel()
+    
+    # Lanzar excepción si se alcanzó el timeout
+    if exception[0]:
+        raise exception[0]
 
 
 class BatchInference:

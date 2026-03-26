@@ -244,39 +244,73 @@ def create_batch_deployment(
 # ── 5. Punto de entrada ───────────────────────────────────────────────────
 
 def main(model_path: str = DEFAULT_MODEL_OUTPUT_PATH) -> None:
-    """Registra el modelo y crea/actualiza el Batch Endpoint completo.
+    """Crea/actualiza el Batch Endpoint usando el modelo ya registrado.
 
     Args:
-        model_path: URI del artefacto best.pt generado por el pipeline de
-            entrenamiento. Por defecto usa la salida estándar del pipeline.
+        model_path: URI del modelo registrado (ej: azureml://models/pcb-yolov8n/versions/1774551004)
     """
     ml_client = _get_ml_client()
 
-    # 1. Registrar el modelo
-    registered_model = register_model(ml_client, model_path)
+    logger.info("=" * 60)
+    logger.info("🚀 DESPLEGANDO BATCH ENDPOINT")
+    logger.info("=" * 60)
+    
+    # ✅ CAMBIO: Obtener el modelo YA REGISTRADO en lugar de registrarlo de nuevo
+    logger.info("📦 Obteniendo modelo registrado: %s", model_path)
+    
+    # Extraer nombre y versión de la ruta
+    # Formato esperado: azureml://models/pcb-yolov8n/versions/1774551004
+    try:
+        parts = model_path.split("/")
+        if "models" in parts:
+            model_name = parts[parts.index("models") + 1]
+            model_version = parts[parts.index("versions") + 1] if "versions" in parts else None
+            
+            # Obtener el modelo registrado
+            if model_version:
+                registered_model = ml_client.models.get(name=model_name, version=model_version)
+            else:
+                registered_model = ml_client.models.get(name=model_name)
+            
+            logger.info("✅ Modelo encontrado: %s (v%s)", registered_model.name, registered_model.version)
+        else:
+            # Fallback: si es una ruta de archivo, registrarlo
+            logger.warning("⚠️ Path no es un modelo registrado, intentando registrar...")
+            registered_model = register_model(ml_client, model_path)
+    except Exception as e:
+        logger.error("❌ Error obteniendo modelo: %s", e)
+        logger.info("Intentando registrar modelo desde path...")
+        registered_model = register_model(ml_client, model_path)
 
     # 2. Crear el Batch Endpoint
+    logger.info("\n📍 Creando Batch Endpoint...")
     create_batch_endpoint(ml_client)
 
     # 3. Crear el Batch Deployment
+    logger.info("\n🚀 Creando Batch Deployment...")
     create_batch_deployment(ml_client, registered_model)
 
-    # 4. Obtener el scoring URI del endpoint
+    # 4. Obtener información del endpoint
     endpoint = ml_client.batch_endpoints.get(BATCH_ENDPOINT_NAME)
+    
+    logger.info("\n" + "=" * 60)
+    logger.info("✅ PIPELINE DE INFERENCIA DESPLEGADO CON ÉXITO")
     logger.info("=" * 60)
-    logger.info("Pipeline de inferencia desplegado con éxito.")
-    logger.info("Endpoint: %s", BATCH_ENDPOINT_NAME)
-    logger.info("Deployment: %s", BATCH_DEPLOYMENT_NAME)
+    logger.info("📍 Endpoint: %s", BATCH_ENDPOINT_NAME)
+    logger.info("🔧 Deployment: %s", BATCH_DEPLOYMENT_NAME)
+    logger.info("📦 Modelo: %s (v%s)", registered_model.name, registered_model.version)
     if hasattr(endpoint, "scoring_uri") and endpoint.scoring_uri:
-        logger.info("Scoring URI: %s", endpoint.scoring_uri)
+        logger.info("🌐 Scoring URI: %s", endpoint.scoring_uri)
     logger.info("=" * 60)
-    logger.info(
-        "Configura en .env:\n"
-        "  API_HOST=<scoring_uri_host>\n"
-        "  API_PORT=443\n"
-        "Para que el frontend Streamlit invoque el endpoint."
-    )
-
+    
+    logger.info("\n✅ PRÓXIMOS PASOS:")
+    logger.info("   1. Prueba el endpoint con:")
+    logger.info("      uv run python test_endpoint.py")
+    logger.info("\n   2. O manualmente:")
+    logger.info("      az ml batch-endpoint invoke \\")
+    logger.info("        --name pcb-batch-inference \\")
+    logger.info("        --deployment-name pcb-yolov8n-deployment \\")
+    logger.info("        --input <ruta_a_imagenes>")
 
 if __name__ == "__main__":
     import argparse
