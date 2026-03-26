@@ -21,7 +21,7 @@ RUN pip install uv
 COPY pyproject.toml ./
 
 # Instalamos dependencias con uv
-RUN uv sync --frozen
+RUN uv sync
 
 # Copiamos los scripts
 COPY components/ ./components/
