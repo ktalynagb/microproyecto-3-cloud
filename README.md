@@ -106,17 +106,50 @@ uv run -m pytest tests/ --cov --cov-report=html
 
 ## 4. Docker (local)
 
+Los tres Dockerfiles usan **multi-stage builds** (build + runtime) con
+**PyTorch CPU** explícito y **uv** como gestor de dependencias.
+
+### 4.1 Frontend Streamlit (root `Dockerfile`)
+
 ```powershell
-# Construir y levantar todos los servicios
+# Construir imagen
+docker build -t pcb-frontend:latest .
+
+# Ejecutar (expone puerto 8501)
+docker run --rm -p 8501:8501 --env-file .env pcb-frontend:latest
+
+# Verificar que arranca sin errores de CUDA
+# → Abrir http://localhost:8501
+```
+
+### 4.2 Backend FastAPI (`deployment/api/Dockerfile`)
+
+```powershell
+# Construir imagen (el contexto de build es la raíz del proyecto)
+docker build -t pcb-api:latest -f deployment/api/Dockerfile .
+
+# Ejecutar (expone puerto 8080)
+docker run --rm -p 8080:8080 --env-file deployment/azure/.env pcb-api:latest
+
+# Health check
+curl http://localhost:8080/api/v1/health
+```
+
+### 4.3 AWS App Runner (`deployment/aws/Dockerfile`)
+
+```powershell
+# Construir imagen
+docker build -t pcb-aws:latest -f deployment/aws/Dockerfile .
+
+# Ejecutar (expone puerto 8501)
+docker run --rm -p 8501:8501 pcb-aws:latest
+```
+
+### 4.4 Todos los servicios con Docker Compose
+
+```powershell
+# Construir y levantar backend (8080) + frontend (8501)
 docker-compose up --build
-
-# Solo el backend FastAPI (puerto 8000)
-docker build -t pcb-api -f Dockerfile-api .
-docker run --rm -p 8000:8000 --env-file .env pcb-api
-
-# Solo el frontend Streamlit (puerto 8501)
-docker build -t pcb-frontend -f Dockerfile .
-docker run --rm -p 8501:8501 pcb-frontend
 ```
 
 ---
