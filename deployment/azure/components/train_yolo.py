@@ -103,14 +103,15 @@ def main() -> None:
 
     # ✅ DESACTIVAR MLflow callback de Ultralytics para evitar conflicto con Azure ML
     import os
-    os.environ["YOLO_VERBOSE"] = "False"
+    os.environ["YOLO_MLFLOW"] = "False"
+
+    from ultralytics.utils.callbacks import callbacks as ult_callbacks
+    
+    # Remover el callback de MLflow del registro global
+    if hasattr(ult_callbacks, 'CALLBACKS') and 'mlflow' in ult_callbacks.CALLBACKS:
+        ult_callbacks.CALLBACKS.pop('mlflow', None)
 
     model = YOLO(str(base_model_dst))
-    
-    # ✅ Deshabilitar el callback de MLflow de Ultralytics
-    # Busca y elimina el callback mlflow si existe
-    if "mlflow" in model.callbacks:
-        del model.callbacks["mlflow"]
     
     # Alternativa: deshabilitar TODOS los callbacks excepto los que queremos
     model.callbacks.clear()
