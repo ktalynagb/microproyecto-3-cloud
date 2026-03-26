@@ -101,15 +101,13 @@ def main() -> None:
         }
     )
 
-    # ✅ DESACTIVAR MLflow callback de Ultralytics para evitar conflicto con Azure ML
-    import os
-    os.environ["YOLO_MLFLOW"] = "False"
+    from ultralytics import settings
+    settings.update({"mlflow": False})
+
+    from ultralytics import YOLO
 
     model = YOLO(str(base_model_dst))
-    
-    model.callbacks.clear()
-    
-    # ✅ Entrenar sin callbacks automáticos
+        
     results = model.train(
         data=str(dataset_yaml),
         epochs=args.epochs,

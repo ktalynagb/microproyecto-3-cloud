@@ -59,7 +59,6 @@ CONFIDENCE_THRESHOLD = 0.25
 TRAIN_SPLIT = 0.8
 RANDOM_SEED = 42
 
-
 # ── 1. Conectar al Workspace ─────────────────────────────────────────────
 
 def _load_config() -> dict:
