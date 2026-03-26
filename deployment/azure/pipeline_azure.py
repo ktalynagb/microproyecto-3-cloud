@@ -121,6 +121,8 @@ def _ensure_compute(ml_client: MLClient) -> None:
 
 def _ensure_environment(ml_client: MLClient) -> None:
     """Registra el entorno desde el Dockerfile si no existe."""
+    from azure.ai.ml.entities import BuildContext
+    
     env_tag = f"{ENVIRONMENT_NAME}:{ENVIRONMENT_VERSION}"
     try:
         ml_client.environments.get(ENVIRONMENT_NAME, version=ENVIRONMENT_VERSION)
@@ -132,15 +134,15 @@ def _ensure_environment(ml_client: MLClient) -> None:
         if not dockerfile_path.exists():
             raise FileNotFoundError(f"Dockerfile no encontrado en {dockerfile_path}")
         
+        # Usar BuildContext para construir la imagen desde Dockerfile
         env = Environment(
             name=ENVIRONMENT_NAME,
             version=ENVIRONMENT_VERSION,
             description="Entorno para pipeline YOLOv8 PCB - Dockerfile + Conda",
-            dockerfile=str(dockerfile_path),
+            build=BuildContext(path=str(dockerfile_path.parent)),
         )
         ml_client.environments.create_or_update(env)
         logger.info("Entorno '%s' registrado desde Dockerfile.", env_tag)
-
 
 # ── 3. Definición de los componentes ────────────────────────────────────
 
