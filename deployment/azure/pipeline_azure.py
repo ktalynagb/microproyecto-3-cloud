@@ -47,7 +47,7 @@ _COMPONENTS_DIR = Path(__file__).resolve().parent / "components"
 # ── Constantes del pipeline ──────────────────────────────────────────────
 COMPUTE_NAME = "cpu-cluster-ds3"
 ENVIRONMENT_NAME = "pcb-yolo-env"
-ENVIRONMENT_VERSION = "2"
+ENVIRONMENT_VERSION = "3"
 PIPELINE_NAME = "pcb-defect-pipeline"
 EXPERIMENT_NAME = "pcb-defect-yolov8-finetuning"
 
@@ -131,8 +131,8 @@ def _ensure_environment(ml_client: MLClient) -> None:
             name=ENVIRONMENT_NAME,
             version=ENVIRONMENT_VERSION,
             description="Entorno Conda para pipeline YOLOv8 PCB - Flux Solutions Cali",
+            dockerfile=str(Path(__file__).resolve().parent / "Dockerfile"),
             conda_file=str(_CONDA_FILE),
-            image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04",
         )
         ml_client.environments.create_or_update(env)
         logger.info("Entorno '%s' registrado.", env_tag)
