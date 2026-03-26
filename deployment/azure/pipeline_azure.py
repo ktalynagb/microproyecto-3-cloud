@@ -65,6 +65,9 @@ CONFIDENCE_THRESHOLD = 0.25
 TRAIN_SPLIT = 0.8
 RANDOM_SEED = 42
 
+# Ruta dinámica de output con timestamp para evitar conflictos
+_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 # Nombre del endpoint de batch inference
 BATCH_ENDPOINT_NAME = "pcb-batch-inference"
 BATCH_DEPLOYMENT_NAME = "pcb-yolov8n-deployment"
@@ -216,6 +219,10 @@ train_component = command(
     compute=COMPUTE_NAME,
 )
 
+from datetime import datetime
+
+_OUTPUT_PATH = f"azureml://datastores/workspaceblobstore/paths/pcb-results-{_TIMESTAMP}/"
+
 evaluate_component = command(
     name="evaluate_model",
     display_name="4. Evaluate Model (mAP + exportación)",
@@ -227,7 +234,7 @@ evaluate_component = command(
     outputs={
         "output_data": Output(
             type=AssetTypes.URI_FOLDER,
-            path="azureml://datastores/workspaceblobstore/paths/pcb-results/",
+            path=_OUTPUT_PATH,  # ✅ Usa timestamp
         )
     },
     code=str(_COMPONENTS_DIR),
