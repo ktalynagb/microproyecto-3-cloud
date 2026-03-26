@@ -73,7 +73,7 @@ DEFAULT_MODEL_OUTPUT_PATH = (
     "azureml://subscriptions/2a088410-37ec-472a-ae7e-09126fba02a6/"
     "resourceGroups/pcb-ml-rg/"
     "workspaces/pcb-ml-workspace/"
-    "datastores/workspaceblobstore/paths/pcb-results/"
+    "datastores/workspaceblobstore/paths/pcb-results/best.pt"
 )
 
 _ENV_REF = f"azureml:{ENVIRONMENT_NAME}:{ENVIRONMENT_VERSION}"
