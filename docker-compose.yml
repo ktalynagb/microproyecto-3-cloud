@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: pcb-defect-api:latest
+    container_name: pcb-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PCB_API_KEY=${PCB_API_KEY:-changeme-secret-key}
+      - BATCH_ENDPOINT_URL=${BATCH_ENDPOINT_URL:-https://pcb-batch-inference.centralus.inference.ml.azure.com/jobs}
+      - AZURE_ML_TOKEN=${AZURE_ML_TOKEN:-}
+      - STORAGE_ACCOUNT=${STORAGE_ACCOUNT:-pcbmlworstorage428505ef7}
+      - STORAGE_KEY=${STORAGE_KEY:-}
+      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING:-}
+      - PREDICTIONS_CONTAINER=${PREDICTIONS_CONTAINER:-azureml-blobstore-fa3e2152-1a09-4e81-acb4-3f701118ca5e}
+      - INPUT_CONTAINER=${INPUT_CONTAINER:-pcb-inference-input}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8501,http://127.0.0.1:8501}
+      - POLL_INTERVAL_S=${POLL_INTERVAL_S:-10}
+      - MAX_POLL_ATTEMPTS=${MAX_POLL_ATTEMPTS:-36}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - pcb-net
+
+  frontend:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: pcb-frontend:latest
+    container_name: pcb-frontend
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://api:8000
+      - PCB_API_KEY=${PCB_API_KEY:-changeme-secret-key}
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - pcb-net
+
+networks:
+  pcb-net:
+    driver: bridge

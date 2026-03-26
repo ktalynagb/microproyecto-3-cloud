@@ -1,0 +1,41 @@
+# Archivos generados automáticamente
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Credenciales y configuración local
+.env
+*.pem
+*.key
+
+# Docker
+.dockerignore
+
+# Modelos entrenados (grandes)
+*.pt
+*.onnx
+*.torchscript
+
+# Datos de prueba
+data/
+datasets/
+
+# Logs
+*.log
+logs/
+
+# Streamlit cache
+.streamlit/
+
+# Jupyter
+.ipynb_checkpoints/
