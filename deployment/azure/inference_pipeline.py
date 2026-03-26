@@ -69,12 +69,28 @@ BATCH_DEPLOYMENT_NAME = "pcb-yolov8n-deployment"
 # Ruta por defecto del artefacto best.pt generado por el pipeline de
 # entrenamiento (coincide con el ``path`` de la salida de evaluate_component
 # en pipeline_azure.py).
-DEFAULT_MODEL_OUTPUT_PATH = (
-    "azureml://subscriptions/2a088410-37ec-472a-ae7e-09126fba02a6/"
-    "resourceGroups/pcb-ml-rg/"
-    "workspaces/pcb-ml-workspace/"
-    "datastores/workspaceblobstore/paths/pcb-results/best.pt"
-)
+def _get_latest_model_path() -> str:
+    """Lee la información del modelo registrado desde model_info.json"""
+    model_info_file = _REPO_ROOT / "model_info.json"
+    
+    if model_info_file.exists():
+        try:
+            with open(model_info_file) as f:
+                info = json.load(f)
+            logger.info("📦 Usando modelo registrado: %s (v%s)", info["name"], info["version"])
+            return f"azureml://models/{info['name']}/versions/{info['version']}"
+        except Exception as e:
+            logger.warning("⚠️ No se pudo leer model_info.json: %e", e)
+    
+    # Fallback a ruta estándar
+    return (
+        "azureml://subscriptions/2a088410-37ec-472a-ae7e-09126fba02a6/"
+        "resourceGroups/pcb-ml-rg/"
+        "workspaces/pcb-ml-workspace/"
+        "datastores/workspaceblobstore/paths/pcb-results/best.pt"
+    )
+
+DEFAULT_MODEL_OUTPUT_PATH = _get_latest_model_path()
 
 _ENV_REF = f"azureml:{ENVIRONMENT_NAME}:{ENVIRONMENT_VERSION}"
 

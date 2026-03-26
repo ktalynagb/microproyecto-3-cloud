@@ -30,6 +30,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import time  
 
 from azure.ai.ml import Input, MLClient, Output, command, dsl
 from azure.ai.ml.constants import AssetTypes
@@ -56,7 +57,7 @@ PIPELINE_NAME = "pcb-defect-pipeline"
 EXPERIMENT_NAME = "pcb-defect-yolov8-finetuning"
 
 # Hiperparámetros de fine-tuning
-FINETUNE_EPOCHS = 10
+FINETUNE_EPOCHS = 1
 FINETUNE_IMGSZ = 640
 FINETUNE_BATCH = 16
 FINETUNE_LR0 = 0.01
@@ -352,12 +353,82 @@ def main() -> None:
     _ensure_compute(ml_client)
     _ensure_environment(ml_client)
 
+    # 1. Ejecutar el pipeline de entrenamiento
     pipeline_job = pcb_training_pipeline()
     pipeline_job.experiment_name = EXPERIMENT_NAME
 
     submitted = ml_client.jobs.create_or_update(pipeline_job)
+    logger.info("=" * 60)
     logger.info("Pipeline enviado. Job name: %s", submitted.name)
     logger.info("Monitorea el progreso en: https://ml.azure.com")
+    logger.info("=" * 60)
+
+    # 2. ✅ NUEVO: Esperar a que termine y registrar el modelo
+    logger.info("\n⏳ Esperando a que termine el pipeline...")
+    completed_job = ml_client.jobs.stream(submitted.name)
+    
+    if completed_job.status == "Completed":
+        logger.info("✅ Pipeline completado exitosamente!")
+        
+        # 3. ✅ Obtener la salida (ruta del best.pt)
+        # La salida viene del último paso (evaluate_model)
+        outputs = completed_job.outputs
+        if hasattr(outputs, "output_data") or "output_data" in dir(outputs):
+            model_output_uri = outputs.output_data.path if hasattr(outputs, "output_data") else None
+            
+            if not model_output_uri:
+                # Fallback: usar la ruta estándar
+                model_output_uri = (
+                    "azureml://datastores/workspaceblobstore/paths/pcb-results/best.pt"
+                )
+            
+            logger.info("\n📦 Registrando modelo en Azure ML Model Registry...")
+            logger.info("   URI del modelo: %s", model_output_uri)
+            
+            # 4. ✅ Registrar el modelo
+            from azure.ai.ml.entities import Model
+            
+            model = Model(
+                path=model_output_uri,
+                name="pcb-yolov8n",
+                version=str(int(time.time())),  # Usar timestamp como versión
+                description=(
+                    "YOLOv8n fine-tuned para detección/segmentación de defectos en PCB. "
+                    f"Job: {submitted.name}"
+                ),
+                type="custom_model",
+            )
+            
+            registered_model = ml_client.models.create_or_update(model)
+            logger.info("✅ Modelo registrado exitosamente!")
+            logger.info("   Nombre: %s", registered_model.name)
+            logger.info("   Versión: %s", registered_model.version)
+            logger.info("   ID: %s", registered_model.id)
+            
+            # 5. ✅ Guardar la información para referencia futura
+            model_info = {
+                "name": registered_model.name,
+                "version": registered_model.version,
+                "id": registered_model.id,
+                "path": model_output_uri,
+                "job_name": submitted.name,
+                "timestamp": str(registered_model.creation_context.created_at),
+            }
+            
+            model_info_file = _REPO_ROOT / "model_info.json"
+            with open(model_info_file, "w") as f:
+                json.dump(model_info, f, indent=2)
+            logger.info("   Información guardada en: %s", model_info_file)
+            
+            logger.info("\n" + "=" * 60)
+            logger.info("🚀 PRÓXIMO PASO:")
+            logger.info("   Ejecuta el pipeline de inferencia:")
+            logger.info("   uv run python deployment/azure/inference_pipeline.py")
+            logger.info("=" * 60)
+        else:
+            logger.error("❌ No se pudo encontrar la salida del pipeline")
+    else:
+        logger.error("❌ Pipeline falló con estado: %s", completed_job.status)
 
 
 if __name__ == "__main__":
