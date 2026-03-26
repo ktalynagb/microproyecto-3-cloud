@@ -8,6 +8,9 @@ defectos en PCB (Flux Solutions Cali):
   3. Train YOLOv8n    - Fine-tuning del modelo con registro MLflow.
   4. Evaluate Model   - Inferencia, métricas (mAP) y exportación de resultados.
 
+Adicionalmente registra el modelo entrenado como Batch Endpoint de Azure ML
+para inferencia en lote (POST /score con hasta 10 imágenes PCB).
+
 Uso (Windows PowerShell con uv):
     uv run python deployment/azure/pipeline_azure.py
 
@@ -58,6 +61,10 @@ FINETUNE_LR0 = 0.01
 CONFIDENCE_THRESHOLD = 0.25
 TRAIN_SPLIT = 0.8
 RANDOM_SEED = 42
+
+# Nombre del endpoint de batch inference
+BATCH_ENDPOINT_NAME = "pcb-batch-inference"
+BATCH_DEPLOYMENT_NAME = "pcb-yolov8n-deployment"
 
 # ── 1. Conectar al Workspace ─────────────────────────────────────────────
 
@@ -132,7 +139,6 @@ def _ensure_environment(ml_client: MLClient) -> None:
         if not dockerfile_path.exists():
             raise FileNotFoundError(f"Dockerfile no encontrado en {dockerfile_path}")
         
-        # Usar BuildContext para construir la imagen desde Dockerfile
         env = Environment(
             name=ENVIRONMENT_NAME,
             version=ENVIRONMENT_VERSION,
@@ -183,7 +189,10 @@ preprocess_component = command(
 train_component = command(
     name="train_yolo",
     display_name="3. Train YOLOv8n (fine-tuning)",
-    description="Fine-tuning de YOLOv8n sobre el dataset PCB con registro MLflow.",
+    description=(
+        "Fine-tuning de YOLOv8n sobre el dataset PCB con registro MLflow. "
+        "Detecta automáticamente si los labels son segmentación o detección."
+    ),
     inputs={"input_data": Input(type=AssetTypes.URI_FOLDER)},
     outputs={"output_data": Output(type=AssetTypes.URI_FOLDER)},
     code=str(_COMPONENTS_DIR),
@@ -194,7 +203,8 @@ train_component = command(
         f"--epochs {FINETUNE_EPOCHS} "
         f"--imgsz {FINETUNE_IMGSZ} "
         f"--batch {FINETUNE_BATCH} "
-        f"--lr0 {FINETUNE_LR0}"
+        f"--lr0 {FINETUNE_LR0} "
+        "--task auto"
     ),
     environment=_ENV_REF,
     compute=COMPUTE_NAME,
@@ -255,7 +265,72 @@ def pcb_training_pipeline():
     )
 
 
-# ── 5. Punto de entrada ──────────────────────────────────────────────────
+# ── 5. Registro del Batch Endpoint ───────────────────────────────────────
+
+def _register_batch_endpoint(ml_client: MLClient, model_output_path: str) -> None:
+    """Registra el modelo entrenado como Batch Endpoint de Azure ML.
+
+    Crea un endpoint de inferencia por lote que acepta hasta 10 imágenes PCB
+    y devuelve detecciones con clase, bbox y confidence.
+
+    Args:
+        ml_client: Cliente autenticado de Azure ML.
+        model_output_path: URI del directorio con best.pt (salida de train_yolo).
+    """
+    from azure.ai.ml.entities import (
+        BatchDeployment,
+        BatchEndpoint,
+        BatchRetrySettings,
+        CodeConfiguration,
+        Model,
+    )
+    from azure.ai.ml.constants import BatchDeploymentOutputAction
+
+    logger.info("Registrando modelo en Azure ML Model Registry...")
+    model = Model(
+        path=model_output_path,
+        name="pcb-yolov8n",
+        description="YOLOv8n fine-tuned para detección de defectos en PCB.",
+        type="custom_model",
+    )
+    registered_model = ml_client.models.create_or_update(model)
+    logger.info("Modelo registrado: %s (versión %s)", registered_model.name, registered_model.version)
+
+    # Crear Batch Endpoint
+    logger.info("Creando Batch Endpoint '%s'...", BATCH_ENDPOINT_NAME)
+    endpoint = BatchEndpoint(
+        name=BATCH_ENDPOINT_NAME,
+        description="Batch inference endpoint para detección de defectos en PCBs.",
+    )
+    ml_client.batch_endpoints.begin_create_or_update(endpoint).result()
+
+    # Crear Batch Deployment
+    logger.info("Creando Batch Deployment '%s'...", BATCH_DEPLOYMENT_NAME)
+    deployment = BatchDeployment(
+        name=BATCH_DEPLOYMENT_NAME,
+        endpoint_name=BATCH_ENDPOINT_NAME,
+        model=registered_model.id,
+        code_configuration=CodeConfiguration(
+            code=str(_COMPONENTS_DIR),
+            scoring_script="batch_inference.py",
+        ),
+        environment=_ENV_REF,
+        compute=COMPUTE_NAME,
+        instance_count=1,
+        max_concurrency_per_instance=1,
+        mini_batch_size=10,
+        output_action=BatchDeploymentOutputAction.APPEND_ROW,
+        retry_settings=BatchRetrySettings(max_retries=2, timeout=60),
+    )
+    ml_client.batch_deployments.begin_create_or_update(deployment).result()
+    logger.info(
+        "Batch Endpoint '%s' listo. Deployment: '%s'.",
+        BATCH_ENDPOINT_NAME,
+        BATCH_DEPLOYMENT_NAME,
+    )
+
+
+# ── 6. Punto de entrada ──────────────────────────────────────────────────
 
 def main() -> None:
     ml_client = _get_ml_client()
