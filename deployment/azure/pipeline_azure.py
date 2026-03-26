@@ -3,7 +3,7 @@
 Pipeline de 4 pasos para fine-tuning del modelo YOLOv8n de segmentación de
 defectos en PCB (Flux Solutions Cali):
 
-  1. Ingest Data      - Descarga automática del dataset desde Hugging Face.
+  1. Ingest Data      - Descarga automática del dataset desde Roboflow.
   2. Preprocess Split - Transformación (resize 640×640) y partición 80/20.
   3. Train YOLOv8n    - Fine-tuning del modelo con registro MLflow.
   4. Evaluate Model   - Inferencia, métricas (mAP) y exportación de resultados.
@@ -12,22 +12,23 @@ Adicionalmente registra el modelo entrenado como Batch Endpoint de Azure ML
 para inferencia en lote (POST /score con hasta 10 imágenes PCB).
 
 Uso (Windows PowerShell con uv):
+    $env:ROBOFLOW_API_KEY = "<tu_api_key>"
     uv run python deployment/azure/pipeline_azure.py
 
 Requisitos previos:
     * config.json en la raíz del proyecto con subscription_id, resource_group
       y workspace_name válidos.
+    * ROBOFLOW_API_KEY exportada como variable de entorno (ver README.md sección 8).
     * El Workspace de Azure ML (pcb-ml-workspace) debe existir y estar
       accesible con las credenciales activas (az login).
     * El clúster de cómputo se crea automáticamente si no existe (DS3 v2).
-    * No es necesario tener un dataset local: el pipeline lo descarga
-      automáticamente desde Hugging Face.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from azure.ai.ml import Input, MLClient, Output, command, dsl
@@ -155,8 +156,11 @@ _ENV_REF = f"azureml:{ENVIRONMENT_NAME}:{ENVIRONMENT_VERSION}"
 
 ingest_component = command(
     name="ingest_data",
-    display_name="1. Ingest Data (Hugging Face)",
-    description="Descarga el dataset keremberke/pcb-defect-segmentation desde Hugging Face.",
+    display_name="1. Ingest Data (Roboflow)",
+    description=(
+        "Descarga el dataset diplom-qz7q6/defects-2q87r v8 desde Roboflow. "
+        "Requiere ROBOFLOW_API_KEY como variable de entorno."
+    ),
     outputs={"output_data": Output(type=AssetTypes.URI_FOLDER)},
     code=str(_COMPONENTS_DIR),
     command="python ingest_data.py --output_data ${{outputs.output_data}}",
@@ -244,13 +248,23 @@ evaluate_component = command(
     name=PIPELINE_NAME,
     description=(
         "Pipeline YOLOv8n para detección de defectos en PCB - Flux Solutions Cali. "
-        "4 pasos: Ingest (HuggingFace) -> Preprocess/Split -> Train -> Evaluate."
+        "4 pasos: Ingest (Roboflow) -> Preprocess/Split -> Train -> Evaluate."
     ),
     default_compute=COMPUTE_NAME,
 )
 def pcb_training_pipeline():
     """Pipeline modular de 4 pasos: ingesta, preprocesamiento, entrenamiento y evaluación."""
     step_ingest = ingest_component()
+    # Pasar ROBOFLOW_API_KEY al step de ingesta para descargar el dataset
+    roboflow_api_key = os.environ.get("ROBOFLOW_API_KEY", "")
+    if roboflow_api_key:
+        step_ingest.environment_variables = {"ROBOFLOW_API_KEY": roboflow_api_key}
+    else:
+        logger.warning(
+            "⚠️ ROBOFLOW_API_KEY no definida. El paso de ingesta usará fallback "
+            "Hugging Face y puede obtener 0 imágenes. "
+            "Define ROBOFLOW_API_KEY antes de ejecutar el pipeline (ver README.md sección 8)."
+        )
 
     step_preprocess = preprocess_component(
         input_data=step_ingest.outputs.output_data,

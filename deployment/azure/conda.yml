@@ -5,30 +5,37 @@ channels:
 dependencies:
   - python=3.11
   - pip:
-      # Hugging Face
+      # Roboflow (ingesta de datos - REQUERIDO)
+      - roboflow>=1.1.0
+      # Hugging Face (fallback para ingesta)
       - datasets>=2.14.0
       - huggingface-hub>=1.7.2
       # Visión Artificial
       - ultralytics>=8.3.0
+      - torch>=2.0.0
+      - torchvision>=0.15.0
       - opencv-python-headless>=4.10.0
       - Pillow>=11.2.1
       # Datos
+      - numpy>=1.24.0
       - pandas>=2.2.3
       - reportlab>=4.2.0
       # Cloud Azure
+      - azureml-core>=1.53.0
+      - azureml-sdk>=1.53.0
       - azure-ai-ml>=1.32.0
       - azure-identity>=1.25.3
       # AWS (si lo necesitas)
       - boto3>=1.42.75
       - sagemaker>=3.6.0
       # ML Tracking
-      - mlflow
+      - mlflow>=2.0.0
       - azureml-mlflow
       # Web/API (si corre en este cluster)
       - streamlit>=1.45.0
       - fastapi>=0.115.0
       - uvicorn>=0.34.0
       - python-multipart>=0.0.20
-      - requests>=2.32.0
+      - requests>=2.31.0
       # Config
       - python-dotenv>=1.0.0

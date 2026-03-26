@@ -30,8 +30,8 @@ import random
 import shutil
 from pathlib import Path
 
-# Clases correctas del dataset (4 clases, índices 0-3)
-CLASSES = ["dry_joint", "incorrect_installation", "pcb_damage", "short_circuit"]
+# Clases correctas del dataset Roboflow (4 clases, índices 0-3)
+CLASSES = ["Dry_joint", "Incorrect_installation", "PCB_damage", "Short_circuit"]
 NC = 4
 
 

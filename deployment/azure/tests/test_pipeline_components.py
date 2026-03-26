@@ -101,8 +101,36 @@ class TestIngestData:
 
         assert NC == 4
         assert len(CLASSES) == 4
-        assert "dry_joint" in CLASSES.values()
-        assert "short_circuit" in CLASSES.values()
+        assert "Dry_joint" in CLASSES.values()
+        assert "Short_circuit" in CLASSES.values()
+
+    def test_validate_yolo_label_valid(self, tmp_path):
+        from ingest_data import _validate_yolo_label
+
+        label = tmp_path / "valid.txt"
+        label.write_text("0 0.5 0.5 0.3 0.3\n1 0.1 0.2 0.4 0.4")
+        assert _validate_yolo_label(label) is True
+
+    def test_validate_yolo_label_empty(self, tmp_path):
+        from ingest_data import _validate_yolo_label
+
+        label = tmp_path / "empty.txt"
+        label.write_text("")
+        # Empty label = background image (no defects), valid
+        assert _validate_yolo_label(label) is True
+
+    def test_validate_yolo_label_invalid(self, tmp_path):
+        from ingest_data import _validate_yolo_label
+
+        label = tmp_path / "invalid.txt"
+        label.write_text("0 0.5")  # Solo 2 valores, inválido
+        assert _validate_yolo_label(label) is False
+
+    def test_check_dependencies_runs(self):
+        from ingest_data import check_dependencies
+
+        # No debe lanzar excepción
+        check_dependencies()
 
 
 # ── Tests: preprocess_split ───────────────────────────────────────────────
@@ -213,10 +241,10 @@ class TestTrainYolo:
         content = yaml_path.read_text(encoding="utf-8")
 
         assert "nc: 4" in content
-        assert "dry_joint" in content
-        assert "incorrect_installation" in content
-        assert "pcb_damage" in content
-        assert "short_circuit" in content
+        assert "Dry_joint" in content
+        assert "Incorrect_installation" in content
+        assert "PCB_damage" in content
+        assert "Short_circuit" in content
         assert "Mousebites" not in content
         assert "Opens" not in content
 
@@ -534,7 +562,7 @@ class TestEvaluateModel:
 
         model_dir = tmp_path / "model"
         model_dir.mkdir()
-        summary = {"nc": 4, "classes": ["dry_joint", "incorrect_installation", "pcb_damage", "short_circuit"]}
+        summary = {"nc": 4, "classes": ["Dry_joint", "Incorrect_installation", "PCB_damage", "Short_circuit"]}
         (model_dir / "training_summary.json").write_text(json.dumps(summary))
 
         test_dir = tmp_path / "test"
@@ -544,4 +572,33 @@ class TestEvaluateModel:
 
         yaml_path = _find_dataset_yaml(model_dir, test_dir, output_dir)
         content = yaml_path.read_text()
-        assert "dry_joint" in content
+        assert "Dry_joint" in content
+
+    def test_find_dataset_yaml_regenerates_when_val_path_invalid(self, tmp_path):
+        from evaluate_model import _find_dataset_yaml
+
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        # YAML con val path absoluto que no existe (simula contenedor de entrenamiento)
+        stale_val = "/mnt/old-training-container/val_split/images"
+        yaml_content = (
+            f"path: /old/train/dir\n"
+            f"train: images\n"
+            f"val: {stale_val}\n"
+            f"nc: 4\n"
+            f"names:\n  0: Dry_joint\n"
+        )
+        (model_dir / "dataset.yaml").write_text(yaml_content)
+
+        test_dir = tmp_path / "test"
+        test_dir.mkdir()
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        result = _find_dataset_yaml(model_dir, test_dir, output_dir)
+        assert result is not None
+        assert result.exists()
+        # Debe ser el YAML regenerado en output_dir, no el original con paths inválidos
+        content = result.read_text()
+        assert stale_val not in content
+        assert str(test_dir) in content

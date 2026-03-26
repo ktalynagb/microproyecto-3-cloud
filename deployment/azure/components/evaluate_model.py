@@ -57,34 +57,57 @@ def parse_args() -> argparse.Namespace:
 def _find_dataset_yaml(model_dir: Path, test_dir: Path, output_dir: Path) -> Path | None:
     """Localiza o genera un dataset.yaml para la evaluación oficial con YOLO.
 
-    Busca en model_dir; si no existe, genera uno mínimo apuntando al test set.
+    Busca en model_dir; si no existe o sus rutas son inválidas (p.ej. paths
+    absolutos del contenedor de entrenamiento), genera uno nuevo apuntando
+    al test set actual.
     """
     yaml_path = model_dir / "dataset.yaml"
     if yaml_path.exists():
-        return yaml_path
+        # Validar que los paths del YAML sean accesibles desde este contenedor
+        try:
+            content = yaml_path.read_text(encoding="utf-8")
+            # Buscar la línea 'val: ...' y verificar que la ruta exista
+            import re
+            val_match = re.search(r"^val:\s*(.+)$", content, re.MULTILINE)
+            if val_match:
+                val_path_str = val_match.group(1).strip()
+                val_path = Path(val_path_str)
+                if val_path.is_absolute() and not val_path.exists():
+                    print(
+                        f"[evaluate_model] dataset.yaml encontrado pero path inválido "
+                        f"(val={val_path_str}). Generando nuevo YAML para evaluación."
+                    )
+                    yaml_path = None  # Forzar regeneración
+        except Exception:
+            yaml_path = None  # En caso de error, regenerar
 
-    # Leer resumen de entrenamiento para obtener clases y nc
-    summary_path = model_dir / "training_summary.json"
-    if summary_path.exists():
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        nc = summary.get("nc", 4)
-        classes = summary.get("classes", ["dry_joint", "incorrect_installation", "pcb_damage", "short_circuit"])
-    else:
-        nc = 4
-        classes = ["dry_joint", "incorrect_installation", "pcb_damage", "short_circuit"]
+    if yaml_path is None or not yaml_path.exists():
+        yaml_path = None  # Asegurar que sea None para regenerar
 
-    names_block = "\n".join(f"  {i}: {name}" for i, name in enumerate(classes))
-    images_dir = test_dir / "images" if (test_dir / "images").exists() else test_dir
-    content = (
-        f"path: {test_dir}\n"
-        f"train: images\n"
-        f"val: {images_dir}\n"
-        f"nc: {nc}\n"
-        f"names:\n{names_block}\n"
-    )
-    yaml_path = output_dir / "eval_dataset.yaml"
-    yaml_path.write_text(content, encoding="utf-8")
-    print(f"[evaluate_model] dataset.yaml generado para evaluación: {yaml_path}")
+    if yaml_path is None:
+        # Leer resumen de entrenamiento para obtener clases y nc
+        summary_path = model_dir / "training_summary.json"
+        if summary_path.exists():
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            nc = summary.get("nc", 4)
+            classes = summary.get("classes", ["Dry_joint", "Incorrect_installation", "PCB_damage", "Short_circuit"])
+        else:
+            nc = 4
+            classes = ["Dry_joint", "Incorrect_installation", "PCB_damage", "Short_circuit"]
+
+        names_block = "\n".join(f"  {i}: {name}" for i, name in enumerate(classes))
+        images_dir = test_dir / "images" if (test_dir / "images").exists() else test_dir
+        content = (
+            f"path: {test_dir}\n"
+            f"train: images\n"
+            f"val: {images_dir}\n"
+            f"nc: {nc}\n"
+            f"names:\n{names_block}\n"
+        )
+        yaml_path = output_dir / "eval_dataset.yaml"
+        yaml_path.write_text(content, encoding="utf-8")
+        print(f"[evaluate_model] dataset.yaml generado para evaluación: {yaml_path}")
+
     return yaml_path
 
 

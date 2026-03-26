@@ -202,13 +202,21 @@ Infraestructura de cómputo lista para la sustentación.
 ### 5.5 Ejecutar el pipeline modular de entrenamiento
 
 ```powershell
-# Ejecutar el pipeline completo (YOLOv8n fine-tuning, descarga HF automática)
+# REQUERIDO: Exportar ROBOFLOW_API_KEY antes de ejecutar (ver sección 8.2)
+$env:ROBOFLOW_API_KEY = "<tu_api_key>"
+
+# Ejecutar el pipeline completo (YOLOv8n fine-tuning, descarga Roboflow automática)
 uv run python deployment/azure/pipeline_azure.py
 ```
 
-> **Sin dataset local requerido:** el pipeline descarga automáticamente el
-> dataset [`keremberke/pcb-defect-segmentation`](https://huggingface.co/datasets/keremberke/pcb-defect-segmentation)
-> desde Hugging Face en el primer paso.
+> **Dataset Roboflow (recomendado):** el pipeline descarga automáticamente el
+> dataset [`diplom-qz7q6/defects-2q87r v8`](https://universe.roboflow.com/diplom-qz7q6/defects-2q87r/dataset/8)
+> desde Roboflow con imágenes + labels YOLO correctos para las 4 clases:
+> `Dry_joint`, `Incorrect_installation`, `PCB_damage`, `Short_circuit`.
+>
+> **Sin `ROBOFLOW_API_KEY`:** el pipeline usa fallback Hugging Face
+> (`keremberke/pcb-defect-segmentation`) que puede obtener 0 imágenes
+> útiles para entrenamiento (ver sección 9 Troubleshooting).
 
 El pipeline ejecuta los siguientes 4 códigos en Azure ML que corresponde a los siguientes pasos:
 
@@ -594,16 +602,27 @@ Write-Host "Frontend URL: http://$ALB_URL"
 
 ## 8. Variables de entorno
 
-Crea un archivo `.env` en la raíz del proyecto (ya incluido en `.gitignore`):
+Crea un archivo `.env` en la raíz del proyecto basándote en `.env.example`
+(el `.env` real está en `.gitignore` y **nunca** debe commitearse):
+
+```powershell
+Copy-Item .env.example .env
+# Editar .env con los valores reales
+```
+
+### 8.1 Configuración local (`.env`)
 
 ```env
+# Roboflow API (REQUERIDO para pipeline de entrenamiento)
+ROBOFLOW_API_KEY=<tu_api_key_de_roboflow>
+
 # Backend FastAPI (servidor de inferencia local o en contenedor)
 API_HOST=localhost
 API_PORT=8000
 API_TIMEOUT=60
 LOG_LEVEL=INFO
 
-# Modelo YOLOv8 (Hugging Face)
+# Modelo YOLOv8 (Hugging Face - fallback)
 HF_MODEL_ID=keremberke/yolov8n-pcb-defect-segmentation
 
 # Pipeline de batch inference – modelo
@@ -618,8 +637,70 @@ AZURE_STORAGE_KEY=<clave_de_acceso>
 AZURE_CONTAINER_NAME=pcb-results
 ```
 
-Para el uso en Docker o Azure Container Apps, inyecta estas variables
-directamente como secrets del servicio, sin commitear el archivo `.env`.
+### 8.2 Obtener `ROBOFLOW_API_KEY` paso a paso
+
+1. Ve a <https://app.roboflow.com/settings/account> e inicia sesión (o crea una cuenta gratuita).
+2. En la sección **"Roboflow API"**, copia tu **Private API Key**.
+3. Agrega la clave a tu `.env` local o expórtala como variable de entorno:
+   ```powershell
+   # PowerShell (sesión actual)
+   $env:ROBOFLOW_API_KEY = "<tu_api_key>"
+
+   # O en .env
+   ROBOFLOW_API_KEY=<tu_api_key>
+   ```
+4. El pipeline de entrenamiento descarga automáticamente el dataset
+   [`diplom-qz7q6/defects-2q87r v8`](https://universe.roboflow.com/diplom-qz7q6/defects-2q87r/dataset/8)
+   con la estructura YOLO correcta:
+   ```
+   train/images/ + train/labels/
+   valid/images/ + valid/labels/
+   test/images/  + test/labels/
+   ```
+
+### 8.3 Configuración en Azure ML
+
+Hay dos opciones para pasar `ROBOFLOW_API_KEY` al pipeline de Azure ML:
+
+**Opción A – Variable de entorno al ejecutar el pipeline:**
+
+```powershell
+# Exportar antes de lanzar el pipeline
+$env:ROBOFLOW_API_KEY = "<tu_api_key>"
+uv run python deployment/azure/pipeline_azure.py
+```
+
+El script `pipeline_azure.py` lee automáticamente la variable del entorno
+de la máquina local y la inyecta en el step de ingesta.
+
+**Opción B – Azure Key Vault (recomendado para CI/CD):**
+
+```powershell
+# Crear secreto en Key Vault
+az keyvault secret set `
+  --vault-name <nombre-keyvault> `
+  --name "ROBOFLOW-API-KEY" `
+  --value "<tu_api_key>"
+
+# Referenciar desde pipeline_azure.py (ver documentación Azure ML SDK v2)
+```
+
+### 8.4 Validación automática en pipeline
+
+El script `ingest_data.py` valida la presencia de `ROBOFLOW_API_KEY` al inicio:
+
+- ✅ Si existe → descarga desde Roboflow (dataset completo con labels YOLO)
+- ⚠️ Si no existe → fallback a Hugging Face (puede obtener 0 imágenes, ver sección 9)
+
+Ejecuta el validador de dataset antes del pipeline:
+
+```powershell
+# Verificar estructura del dataset descargado
+uv run python deployment/azure/validate_dataset.py --dataset_dir <ruta_dataset>
+
+# Verificar sincronización Dockerfile ↔ imports Python
+uv run python deployment/azure/validate_dockerfile.py
+```
 
 ### Variables específicas del Batch Endpoint (Azure ML)
 
@@ -628,9 +709,100 @@ requieren estar en el `.env` local:
 
 | Variable | Valor por defecto | Descripción |
 |----------|-------------------|-------------|
+| `ROBOFLOW_API_KEY` | *(requerido)* | API Key de Roboflow para descarga del dataset |
 | `PCB_CONF_THRESHOLD` | `0.25` | Umbral de confianza para detecciones |
 | `PCB_IOU_THRESHOLD` | `0.45` | Umbral IoU para NMS |
 | `PCB_INFERENCE_TIMEOUT` | `30` | Timeout máximo por imagen (segundos) |
 | `AZUREML_MODEL_DIR` | *(inyectado por Azure ML)* | Directorio donde Azure ML monta el modelo `best.pt` |
 
 `inference_pipeline.py` las configura automáticamente al crear el deployment.
+
+---
+
+## 9. Troubleshooting
+
+### 9.1 Error: `Dataset completo: 0 imágenes | splits={}`
+
+**Causa:** `ROBOFLOW_API_KEY` no definida → el pipeline usa fallback Hugging Face
+que descarga zips incompletos.
+
+**Solución:**
+```powershell
+# 1. Obtener API Key en https://app.roboflow.com/settings/account
+# 2. Exportar la variable
+$env:ROBOFLOW_API_KEY = "<tu_api_key>"
+# 3. Volver a ejecutar el pipeline
+uv run python deployment/azure/pipeline_azure.py
+```
+
+---
+
+### 9.2 Error: `WARNING no labels found in segment set, cannot compute metrics`
+
+**Causa:** El modelo se entrenó con imágenes pero sin labels YOLO (mAP = 0).
+
+**Causa raíz:** El dataset de entrenamiento no tiene archivos `.txt` de labels.
+
+**Solución:**
+1. Verificar que `ROBOFLOW_API_KEY` esté definida (ver 9.1)
+2. Validar el dataset descargado:
+   ```powershell
+   uv run python deployment/azure/validate_dataset.py --dataset_dir <ruta>
+   ```
+3. Asegurarse de que el formato sea `yolov8` (incluye labels en formato YOLO detección/segmentación)
+
+---
+
+### 9.3 Error: `images not found, missing path '/mnt/.../val_split/images'`
+
+**Causa:** El `dataset.yaml` guardado durante el entrenamiento tiene rutas absolutas
+del contenedor de entrenamiento que no existen en el contenedor de evaluación.
+
+**Solución (ya implementada en v2.0):** `evaluate_model.py` detecta automáticamente
+si los paths del `dataset.yaml` son inválidos y genera uno nuevo apuntando al test set
+actual. Si ves este error, actualiza el código a la versión más reciente.
+
+---
+
+### 9.4 Error: `ModuleNotFoundError: No module named 'azureml.core'`
+
+**Causa:** El Dockerfile no incluye `azureml-core`.
+
+**Solución (ya implementada en v2.0):** El Dockerfile actualizado incluye:
+```dockerfile
+RUN pip install --no-cache-dir \
+    azureml-core>=1.53.0 \
+    azureml-sdk>=1.53.0 \
+    ...
+```
+Verifica que el entorno Azure ML registrado (`pcb-yolo-env`) use la versión
+correcta del Dockerfile. Si el entorno ya está registrado con la versión anterior,
+incrementa `ENVIRONMENT_VERSION` en `pipeline_azure.py` y re-ejecuta.
+
+---
+
+### 9.5 Verificar sincronización Dockerfile ↔ dependencias
+
+```powershell
+# Ejecutar antes de cada deploy
+uv run python deployment/azure/validate_dockerfile.py
+```
+
+Salida esperada:
+```
+✅ Todos los imports Python están cubiertos en el Dockerfile.
+```
+
+Si aparecen ❌, agrega los paquetes faltantes al Dockerfile y a `conda.yml`.
+
+---
+
+### 9.6 Logs útiles para diagnóstico
+
+| Mensaje | Archivo | Significado |
+|---------|---------|-------------|
+| `Dataset completo: N imágenes` | `ingest_data.py` | N debe ser > 0 |
+| `Split 'train': N imágenes, M labels válidos` | `ingest_data.py` | N ≈ M esperado |
+| `Resize=640x640 \| Train=N \| Test=M` | `preprocess_split.py` | N+M = total imágenes |
+| `dataset.yaml generado en: ...` | `train_yolo.py` | Confirma rutas correctas |
+| `mAP@0.5=X` | `evaluate_model.py` | X > 0 si hay detecciones |
