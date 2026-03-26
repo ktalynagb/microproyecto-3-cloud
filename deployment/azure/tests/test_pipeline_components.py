@@ -14,7 +14,9 @@ import pytest
 
 # Añadir el directorio de componentes al sys.path
 _COMPONENTS_DIR = Path(__file__).resolve().parent.parent / "components"
+_BATCH_INFERENCE_DIR = Path(__file__).resolve().parent.parent / "batch_inference"
 sys.path.insert(0, str(_COMPONENTS_DIR))
+sys.path.insert(0, str(_BATCH_INFERENCE_DIR))
 
 
 # ── Tests: ingest_data ────────────────────────────────────────────────────
@@ -382,7 +384,7 @@ class TestPostProcessor:
     def _make_batch_and_result(self, has_detections: bool = True):
         """Crea objetos Batch y BatchResult de prueba."""
         import cv2
-        from batch_inference import BatchResult, Detection, ImageResult
+        from inference_engine import BatchResult, Detection, ImageResult
         from batch_receiver import Batch, BatchImage
 
         img = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -444,7 +446,7 @@ class TestPostProcessor:
         assert annotated[0].no_defect_notification == "✅ PCB sin defectos"
 
     def test_process_with_mask(self):
-        from batch_inference import BatchResult, Detection, ImageResult
+        from inference_engine import BatchResult, Detection, ImageResult
         from batch_receiver import Batch, BatchImage
         from post_processor import PostProcessor
         import cv2

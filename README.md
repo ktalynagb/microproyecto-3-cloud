@@ -19,9 +19,10 @@ Sistema de inspección de calidad basada en visión artificial para PCB
    - 5.2 [Actualizar config.json](#52-actualizar-configjson)
    - 5.3 [Instalar la extensión Azure ML CLI en Windows](#53-instalar-la-extensión-azure-ml-cli-en-windows)
    - 5.4 [Crear la infraestructura de cómputo](#54-crear-la-infraestructura-de-cómputo)
-   - 5.5 [Ejecutar el pipeline modular](#55-ejecutar-el-pipeline-modular)
-   - 5.6 [Nueva estructura de directorios (Azure)](#56-nueva-estructura-de-directorios-azure)
-6. [Despliegue – Azure Container Apps (Frontend)](#6-despliegue--azure-container-apps-frontend)
+   - 5.5 [Ejecutar el pipeline modular de entrenamiento](#55-ejecutar-el-pipeline-modular-de-entrenamiento)
+   - 5.6 [Desplegar el pipeline de inferencia en lote](#56-desplegar-el-pipeline-de-inferencia-en-lote)
+   - 5.7 [Estructura de directorios (Azure)](#57-estructura-de-directorios-azure)
+6. [Despliegue – Azure Container Apps (Frontend Streamlit)](#6-despliegue--azure-container-apps-frontend-streamlit)
 7. [Despliegue – AWS ECS Fargate (Backend API)](#7-despliegue--aws-ecs-fargate-backend-api)
 8. [Variables de entorno](#8-variables-de-entorno)
 
@@ -198,7 +199,7 @@ Clúster creado con éxito.
 Infraestructura de cómputo lista para la sustentación.
 ```
 
-### 5.5 Ejecutar el pipeline modular
+### 5.5 Ejecutar el pipeline modular de entrenamiento
 
 ```powershell
 # Ejecutar el pipeline completo (YOLOv8n fine-tuning, descarga HF automática)
@@ -234,19 +235,184 @@ El pipeline ejecuta los siguientes 4 códigos en Azure ML que corresponde a los 
 Monitorea el progreso en **Azure ML Studio**:
 <https://ml.azure.com>
 
-### 5.6 Estructura de directorios (Azure)
+### 5.6 Desplegar el pipeline de inferencia en lote
+
+Una vez completado el pipeline de entrenamiento (sección 5.5), ejecuta el
+siguiente script para **registrar el modelo** en Azure ML Model Registry y
+**crear el Batch Endpoint** que el frontend Streamlit invoca:
+
+```powershell
+# (Opcional) Especificar la ruta del artefacto best.pt si difiere del default
+# Por defecto usa la salida del pipeline de entrenamiento en Blob Storage
+uv run python deployment/azure/inference_pipeline.py
+```
+
+Si el modelo está en una ruta local o en un URI distinto, pásala como argumento:
+
+```powershell
+uv run python deployment/azure/inference_pipeline.py `
+  --model_path "azureml://datastores/workspaceblobstore/paths/pcb-results/"
+```
+
+Salida esperada al finalizar:
+
+```
+[INFO] Modelo registrado: pcb-yolov8n (versión 1)
+[INFO] Batch Endpoint 'pcb-batch-inference' listo.
+[INFO] Batch Deployment 'pcb-yolov8n-deployment' desplegado en endpoint 'pcb-batch-inference'.
+[INFO] Pipeline de inferencia desplegado con éxito.
+[INFO] Scoring URI: https://pcb-batch-inference.<region>.inference.ml.azure.com/...
+```
+
+#### Verificar el Batch Endpoint
+
+```powershell
+# Listar endpoints disponibles
+az ml batch-endpoint list --workspace-name pcb-ml-workspace --resource-group pcb-ml-rg
+
+# Ver el estado del deployment
+az ml batch-deployment show `
+  --name pcb-yolov8n-deployment `
+  --endpoint-name pcb-batch-inference `
+  --workspace-name pcb-ml-workspace `
+  --resource-group pcb-ml-rg
+```
+
+#### Invocar el endpoint manualmente (prueba rápida)
+
+Puedes probar el endpoint con un lote de imágenes directamente desde PowerShell
+usando el SDK de Python:
+
+```powershell
+# Ejecutar inferencia sobre un directorio local de imágenes de prueba
+uv run python - <<'EOF'
+import json
+from pathlib import Path
+from azure.ai.ml import MLClient, Input
+from azure.ai.ml.constants import AssetTypes
+from azure.identity import DefaultAzureCredential
+
+ml_client = MLClient.from_config(DefaultAzureCredential())
+
+job = ml_client.batch_endpoints.invoke(
+    endpoint_name="pcb-batch-inference",
+    input=Input(
+        type=AssetTypes.URI_FOLDER,
+        path="<ruta_local_o_uri_azureml_con_imagenes>",
+    ),
+)
+print(f"Job de inferencia enviado: {job.name}")
+print("Monitorea en: https://ml.azure.com")
+EOF
+```
+
+Reemplaza `<ruta_local_o_uri_azureml_con_imagenes>` por la ruta a un directorio
+con imágenes JPG/PNG.
+
+#### Obtener los resultados del lote
+
+```powershell
+# Esperar a que finalice y descargar el JSONL de predicciones
+uv run python - <<'EOF'
+from azure.ai.ml import MLClient
+from azure.identity import DefaultAzureCredential
+
+ml_client = MLClient.from_config(DefaultAzureCredential())
+
+job_name = "<nombre_del_job_devuelto_arriba>"
+ml_client.jobs.stream(job_name)          # Sigue los logs en tiempo real
+
+# El archivo predictions.jsonl se genera en el output del job
+outputs = ml_client.jobs.get(job_name).outputs
+print("Salida:", outputs)
+EOF
+```
+
+El archivo `predictions.jsonl` contiene una línea JSON por imagen con la
+siguiente estructura:
+
+```json
+{
+  "filename": "pcb_001.jpg",
+  "has_defects": true,
+  "no_defect_notification": null,
+  "detections_count": 2,
+  "inference_time_ms": 87.4,
+  "error": null,
+  "detections": [
+    {
+      "class_name": "dry_joint",
+      "class_id": 0,
+      "confidence": 0.83,
+      "bbox": [0.12, 0.34, 0.45, 0.67],
+      "mask_points": [[0.12, 0.34], [0.45, 0.34], [0.45, 0.67], [0.12, 0.67]]
+    }
+  ]
+}
+```
+
+#### Arquitectura del pipeline de inferencia
+
+El script de scoring (`deployment/azure/batch_inference/score.py`) ejecuta
+las siguientes 5 etapas de forma automática por cada lote:
+
+| Etapa | Módulo | Descripción |
+|-------|--------|-------------|
+| 1 | `batch_receiver.py` | Recibe y redimensiona imágenes a 640×640 |
+| 2 | `inference_engine.py` | Ejecuta YOLOv8n (clase, bbox, máscara, confidence) |
+| 3 | `post_processor.py` | Superpone máscaras; notifica "PCB sin defectos" si no hay detecciones |
+| 4 | `blob_exporter.py` | Exporta imágenes anotadas + PDF a Blob Storage (TTL 24 h) |
+| 5 | `delivery.py` | Genera URLs SAS temporales para descarga |
+
+#### Integración con el frontend Streamlit
+
+El frontend Streamlit (`app/streamlit_app.py`) invoca el endpoint de inferencia
+a través de `app/api_client.py`. Configura las variables de entorno para
+apuntar al servidor de inferencia (ver sección 8):
+
+```env
+API_HOST=<hostname_del_inference_server>
+API_PORT=8000
+API_TIMEOUT=60
+```
+
+El cliente llama a `/predict` con cada imagen y recibe la respuesta con:
+`status`, `has_defects`, `defects_summary`, `processed_image_base64`.
+
+---
+
+### 5.7 Estructura de directorios (Azure)
 
 ```
 deployment/azure/
-├── pipeline_azure.py          # Orquestador del pipeline (@dsl.pipeline)
+├── pipeline_azure.py          # Orquestador del pipeline de entrenamiento (@dsl.pipeline)
+├── inference_pipeline.py      # Orquestador del pipeline de inferencia (Batch Endpoint)
 ├── deploy_azure.py            # Crea la infraestructura de cómputo
+├── Dockerfile                 # Imagen Docker para el entorno Azure ML
 ├── conda.yml                  # Entorno Conda registrado en Azure ML
-├── components/                # Scripts independientes de cada paso
+├── components/                # Componentes del pipeline de entrenamiento
 │   ├── ingest_data.py         # Paso 1: descarga dataset desde Hugging Face
 │   ├── preprocess_split.py    # Paso 2: transformación + partición 80/20
 │   ├── train_yolo.py          # Paso 3: fine-tuning YOLOv8n con MLflow
 │   └── evaluate_model.py      # Paso 4: inferencia, mAP y exportación
-└── scripts/                   # Scripts heredados (referencia interna)
+└── batch_inference/           # Módulos del pipeline de inferencia en lote
+    ├── __init__.py
+    ├── score.py               # Script de scoring para Azure ML Batch Endpoint
+    ├── batch_receiver.py      # Etapa 1: recepción y resize de imágenes
+    ├── inference_engine.py    # Etapa 2: inferencia YOLOv8n
+    ├── post_processor.py      # Etapa 3: anotaciones y visualización
+    ├── blob_exporter.py       # Etapa 4: exportación efímera a Blob Storage
+    ├── delivery.py            # Etapa 5: URLs SAS de descarga
+    ├── config.py              # Configuración centralizada
+    ├── utils.py               # Utilidades de imagen (resize, draw, etc.)
+    └── logger.py              # Logging estructurado en JSON
+
+# El frontend PERMANECE en app/ (Streamlit, no FastAPI):
+app/
+├── streamlit_app.py           # Frontend Streamlit (desplegado en Azure Container Apps)
+├── api_client.py              # Cliente REST para el servidor de inferencia
+├── batch_runner.py            # Orquestador de inferencia en lote desde el frontend
+└── ...
 ```
 
 Cada componente en `components/` acepta argumentos `--input_data` y
@@ -254,7 +420,7 @@ Cada componente en `components/` acepta argumentos `--input_data` y
 
 ---
 
-## 6. Despliegue – Azure Container Apps (Frontend)
+## 6. Despliegue – Azure Container Apps (Frontend Streamlit)
 
 Ejecuta los siguientes comandos en **PowerShell** para definir los parámetros
 del proyecto.
@@ -431,15 +597,40 @@ Write-Host "Frontend URL: http://$ALB_URL"
 Crea un archivo `.env` en la raíz del proyecto (ya incluido en `.gitignore`):
 
 ```env
-# Backend FastAPI
+# Backend FastAPI (servidor de inferencia local o en contenedor)
 API_HOST=localhost
 API_PORT=8000
-API_TIMEOUT=30
+API_TIMEOUT=60
 LOG_LEVEL=INFO
 
 # Modelo YOLOv8 (Hugging Face)
 HF_MODEL_ID=keremberke/yolov8n-pcb-defect-segmentation
+
+# Pipeline de batch inference – modelo
+PCB_MODEL_PATH=best.pt
+PCB_CONF_THRESHOLD=0.25
+PCB_IOU_THRESHOLD=0.45
+PCB_INFERENCE_TIMEOUT=30
+
+# Azure Blob Storage (exportación efímera de resultados)
+AZURE_STORAGE_ACCOUNT=<nombre_cuenta_storage>
+AZURE_STORAGE_KEY=<clave_de_acceso>
+AZURE_CONTAINER_NAME=pcb-results
 ```
 
 Para el uso en Docker o Azure Container Apps, inyecta estas variables
 directamente como secrets del servicio, sin commitear el archivo `.env`.
+
+### Variables específicas del Batch Endpoint (Azure ML)
+
+Estas variables se configuran directamente en el Batch Deployment y no
+requieren estar en el `.env` local:
+
+| Variable | Valor por defecto | Descripción |
+|----------|-------------------|-------------|
+| `PCB_CONF_THRESHOLD` | `0.25` | Umbral de confianza para detecciones |
+| `PCB_IOU_THRESHOLD` | `0.45` | Umbral IoU para NMS |
+| `PCB_INFERENCE_TIMEOUT` | `30` | Timeout máximo por imagen (segundos) |
+| `AZUREML_MODEL_DIR` | *(inyectado por Azure ML)* | Directorio donde Azure ML monta el modelo `best.pt` |
+
+`inference_pipeline.py` las configura automáticamente al crear el deployment.
