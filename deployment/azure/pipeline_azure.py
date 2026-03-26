@@ -47,7 +47,7 @@ _COMPONENTS_DIR = Path(__file__).resolve().parent / "components"
 # ── Constantes del pipeline ──────────────────────────────────────────────
 COMPUTE_NAME = "cpu-cluster-ds3"
 ENVIRONMENT_NAME = "pcb-yolo-env"
-ENVIRONMENT_VERSION = "3"
+ENVIRONMENT_VERSION = "4"
 PIPELINE_NAME = "pcb-defect-pipeline"
 EXPERIMENT_NAME = "pcb-defect-yolov8-finetuning"
 

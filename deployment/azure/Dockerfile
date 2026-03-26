@@ -1,37 +1,32 @@
 FROM python:3.11-slim
 
-# Instalamos dependencias de sistema para OpenCV, X11 y rendering
+# Instalamos dependencias de sistema para OpenCV
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libxcb1 \
     libx11-6 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
+    libxrender1 \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copiamos conda.yml para instalar dependencias
-COPY conda.yml ./
+# Instalamos uv
+RUN pip install uv
 
-# Instalamos conda/mamba o usamos pip directamente
-RUN apt-get update && apt-get install -y wget && \
-    wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
-    bash /tmp/miniconda.sh -b -p /opt/conda && \
-    rm /tmp/miniconda.sh && \
-    /opt/conda/bin/conda env create -f conda.yml && \
-    /opt/conda/bin/conda clean -afy
+# Copiamos pyproject.toml y uv.lock (desde la raíz del proyecto)
+COPY pyproject.toml ./
 
-# Activar el entorno
-ENV PATH=/opt/conda/envs/pcb-azure-env-v2/bin:$PATH
+# Instalamos dependencias con uv
+RUN uv sync --frozen
 
-# Copiamos los scripts del pipeline
+# Copiamos los scripts
 COPY components/ ./components/
 
-# Verificar que las dependencias críticas están instaladas
+# Verificar dependencias críticas
 RUN python -c "import datasets; import cv2; import ultralytics; print('✓ Dependencies OK')"
 
 CMD ["/bin/bash"]

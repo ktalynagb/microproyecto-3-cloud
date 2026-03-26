@@ -1,0 +1,25 @@
+[project]
+name = "pcb-ml-pipeline"
+version = "1.0.0"
+description = "ML Pipeline para YOLOv8 PCB - Azure ML"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    # Hugging Face
+    "datasets>=2.14.0",
+    "huggingface-hub>=1.7.2",
+    # Visión Artificial
+    "ultralytics>=8.3.0",
+    "opencv-python-headless>=4.10.0",
+    "Pillow>=11.2.1",
+    # Datos
+    "pandas>=2.2.3",
+    "reportlab>=4.2.0",
+    # Cloud Azure
+    "azure-ai-ml>=1.32.0",
+    "azure-identity>=1.25.3",
+    # ML Tracking
+    "mlflow",
+    "azureml-mlflow",
+    # Config
+    "python-dotenv>=1.0.0",
+]
