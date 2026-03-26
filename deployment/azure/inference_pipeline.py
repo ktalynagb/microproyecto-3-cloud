@@ -69,9 +69,7 @@ BATCH_DEPLOYMENT_NAME = "pcb-yolov8n-deployment"
 # Ruta por defecto del artefacto best.pt generado por el pipeline de
 # entrenamiento (coincide con el ``path`` de la salida de evaluate_component
 # en pipeline_azure.py).
-DEFAULT_MODEL_OUTPUT_PATH = (
-    "azureml://datastores/workspaceblobstore/paths/pcb-results/"
-)
+DEFAULT_MODEL_OUTPUT_PATH = "azureml://models/pcb-yolov8n/versions/2"
 
 _ENV_REF = f"azureml:{ENVIRONMENT_NAME}:{ENVIRONMENT_VERSION}"
 
