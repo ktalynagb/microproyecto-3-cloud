@@ -105,15 +105,8 @@ def main() -> None:
     import os
     os.environ["YOLO_MLFLOW"] = "False"
 
-    from ultralytics.utils.callbacks import callbacks as ult_callbacks
-    
-    # Remover el callback de MLflow del registro global
-    if hasattr(ult_callbacks, 'CALLBACKS') and 'mlflow' in ult_callbacks.CALLBACKS:
-        ult_callbacks.CALLBACKS.pop('mlflow', None)
-
     model = YOLO(str(base_model_dst))
     
-    # Alternativa: deshabilitar TODOS los callbacks excepto los que queremos
     model.callbacks.clear()
     
     # ✅ Entrenar sin callbacks automáticos
