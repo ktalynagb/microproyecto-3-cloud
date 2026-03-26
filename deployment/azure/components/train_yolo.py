@@ -107,7 +107,7 @@ def main() -> None:
 
     model = YOLO(str(base_model_dst))
     
-    # ✅ Entrenar SIN callbacks de MLflow automático
+    # ✅ Entrenar SIN parámetros inválidos
     results = model.train(
         data=str(dataset_yaml),
         epochs=args.epochs,
@@ -118,8 +118,6 @@ def main() -> None:
         project=str(output_dir),
         name="yolov8n_pcb_finetune",
         exist_ok=True,
-        # ✅ Deshabilitar MLflow callback
-        disable_callbacks=True,  # Esto previene que Ultralytics logge automáticamente
     )
 
     print(f"[train_yolo] Entrenamiento completado")
