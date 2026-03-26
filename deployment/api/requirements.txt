@@ -1,0 +1,13 @@
+# Backend FastAPI – PCB Defect Inspection API
+# Dependencias de producción para el contenedor Docker
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+python-multipart>=0.0.20
+pydantic>=2.0.0
+requests>=2.32.0
+python-dotenv>=1.0.0
+
+# Azure SDKs
+azure-storage-blob>=12.24.0
+azure-identity>=1.25.0
