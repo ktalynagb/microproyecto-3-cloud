@@ -371,42 +371,43 @@ def main() -> None:
     logger.info("Monitorea el progreso en: https://ml.azure.com")
     logger.info("=" * 60)
 
-    # 2. ✅ NUEVO: Esperar a que termine y registrar el modelo
+    # 2. ✅ ARREGLADO: Esperar a que termine
     logger.info("\n⏳ Esperando a que termine el pipeline...")
-    completed_job = ml_client.jobs.stream(submitted.name)
+    
+    # Usar stream() sin asignar a variable, solo para esperar
+    ml_client.jobs.stream(submitted.name)
+    
+    # Luego obtener el job completado
+    completed_job = ml_client.jobs.get(submitted.name)
     
     if completed_job.status == "Completed":
         logger.info("✅ Pipeline completado exitosamente!")
         
-        # 3. ✅ Obtener la salida (ruta del best.pt)
-        # La salida viene del último paso (evaluate_model)
+        # 3. ✅ Obtener la salida del paso evaluate_model
         outputs = completed_job.outputs
-        if hasattr(outputs, "output_data") or "output_data" in dir(outputs):
-            model_output_uri = outputs.output_data.path if hasattr(outputs, "output_data") else None
-            
-            if not model_output_uri:
-                # Fallback: usar la ruta estándar
-                model_output_uri = (
-                    "azureml://datastores/workspaceblobstore/paths/pcb-results/best.pt"
-                )
-            
-            logger.info("\n📦 Registrando modelo en Azure ML Model Registry...")
-            logger.info("   URI del modelo: %s", model_output_uri)
-            
-            # 4. ✅ Registrar el modelo
-            from azure.ai.ml.entities import Model
-            
-            model = Model(
-                path=model_output_uri,
-                name="pcb-yolov8n",
-                version=str(int(time.time())),  # Usar timestamp como versión
-                description=(
-                    "YOLOv8n fine-tuned para detección/segmentación de defectos en PCB. "
-                    f"Job: {submitted.name}"
-                ),
-                type="custom_model",
-            )
-            
+        
+        # Construir la ruta del modelo (usa el timestamp del pipeline)
+        model_output_uri = _OUTPUT_PATH + "best.pt"
+        
+        logger.info("\n📦 Registrando modelo en Azure ML Model Registry...")
+        logger.info("   URI del modelo: %s", model_output_uri)
+        
+        # 4. ✅ Registrar el modelo
+        from azure.ai.ml.entities import Model
+        
+        model_version = str(int(time.time()))
+        model = Model(
+            path=model_output_uri,
+            name="pcb-yolov8n",
+            version=model_version,
+            description=(
+                "YOLOv8n fine-tuned para detección/segmentación de defectos en PCB. "
+                f"Job: {submitted.name}"
+            ),
+            type="custom_model",
+        )
+        
+        try:
             registered_model = ml_client.models.create_or_update(model)
             logger.info("✅ Modelo registrado exitosamente!")
             logger.info("   Nombre: %s", registered_model.name)
@@ -420,23 +421,25 @@ def main() -> None:
                 "id": registered_model.id,
                 "path": model_output_uri,
                 "job_name": submitted.name,
-                "timestamp": str(registered_model.creation_context.created_at),
+                "timestamp": str(registered_model.creation_context.created_at) if registered_model.creation_context else datetime.now().isoformat(),
             }
             
             model_info_file = _REPO_ROOT / "model_info.json"
-            with open(model_info_file, "w") as f:
-                json.dump(model_info, f, indent=2)
-            logger.info("   Información guardada en: %s", model_info_file)
+            with open(model_info_file, "w", encoding="utf-8") as f:
+                json.dump(model_info, f, indent=2, ensure_ascii=False)
+            logger.info("   ✓ Información guardada en: %s", model_info_file)
             
             logger.info("\n" + "=" * 60)
             logger.info("🚀 PRÓXIMO PASO:")
             logger.info("   Ejecuta el pipeline de inferencia:")
             logger.info("   uv run python deployment/azure/inference_pipeline.py")
             logger.info("=" * 60)
-        else:
-            logger.error("❌ No se pudo encontrar la salida del pipeline")
+        except Exception as e:
+            logger.error("❌ Error registrando modelo: %s", e)
+            logger.warning("⚠️ Continúa manualmente con inference_pipeline.py si es necesario")
     else:
         logger.error("❌ Pipeline falló con estado: %s", completed_job.status)
+        logger.error("Logs: https://ml.azure.com/runs/%s", submitted.name)
 
 
 if __name__ == "__main__":
