@@ -1,7 +1,19 @@
-"""Cliente REST para el servicio de detección de defectos en PCB.
+"""Clientes REST para el sistema de detección de defectos en PCB.
 
-Lee la configuración de conexión desde .env (API_HOST, API_PORT, API_TIMEOUT)
-y permite sobreescribir los valores por parámetro de constructor.
+Contiene dos clientes:
+
+APIClient
+    Cliente directo para el servidor FastAPI de inferencia local
+    (endpoint /predict).  Lee API_HOST, API_PORT, API_TIMEOUT desde .env.
+
+AzureMLClient
+    Cliente para el backend FastAPI que conecta con el Azure ML Batch
+    Endpoint.  Lee AZURE_BACKEND_URL y BACKEND_API_KEY desde .env.
+
+    Métodos principales:
+        submit_inference(images)     Envía hasta 10 imágenes y retorna job_id.
+        poll_results(job_id)         Consulta el estado del job (polling).
+        get_download_links(job_id)   Retorna resultados completos con SAS URLs.
 
 Estrategia de manejo de errores
 ---------------------------------
@@ -12,15 +24,17 @@ Estrategia de manejo de errores
 
 Uso::
 
-    from app.api_client import APIClient, APIClientError
+    from app.api_client import APIClient, APIClientError, AzureMLClient
 
+    # Cliente local
     client = APIClient()
     result = client.analyze_image(image_bytes, filename="pcb.jpg")
 
-    # Variante segura para uso en lote (nunca lanza):
-    result = client.analyze_image_safe(image_bytes, filename="pcb.jpg")
-    if result["status"] == "error":
-        print(result["error_message"])
+    # Cliente Azure ML Batch
+    az_client = AzureMLClient()
+    job_id = az_client.submit_inference([img1_bytes, img2_bytes])
+    status = az_client.poll_results(job_id)
+    results = az_client.get_download_links(job_id)
 """
 from __future__ import annotations
 
@@ -163,3 +177,195 @@ class APIClient:
         except Exception as exc:
             LOG.exception("Error inesperado en analyze_image_safe: %s", exc)
             return {**_EMPTY_RESULT, "error_message": str(exc)}
+
+
+# ── AzureMLClient ─────────────────────────────────────────────────────────────
+
+
+class AzureMLClient:
+    """Cliente para el backend FastAPI que conecta con Azure ML Batch Endpoint.
+
+    Permite al frontend Streamlit:
+      1. Enviar imágenes para inferencia (submit_inference)
+      2. Consultar el estado del job asíncronamente (poll_results)
+      3. Obtener los resultados con SAS URLs (get_download_links)
+
+    Parameters
+    ----------
+    backend_url:
+        URL base del backend FastAPI (sin barra final).
+        Lee AZURE_BACKEND_URL o usa http://localhost:8080.
+    api_key:
+        API Key para el header X-API-Key.  Lee BACKEND_API_KEY.
+    timeout:
+        Timeout HTTP en segundos para cada petición.
+    """
+
+    def __init__(
+        self,
+        backend_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: int = 60,
+    ) -> None:
+        self.base_url: str = (
+            (backend_url or os.getenv("AZURE_BACKEND_URL", "http://localhost:8080"))
+            .rstrip("/")
+        )
+        self.api_key: str = api_key or os.getenv("BACKEND_API_KEY", "")
+        self.timeout = timeout
+        LOG.info("AzureMLClient configurado en %s", self.base_url)
+
+    @property
+    def _headers(self) -> Dict[str, str]:
+        h: Dict[str, str] = {}
+        if self.api_key:
+            h["X-API-Key"] = self.api_key
+        return h
+
+    # ── submit_inference ───────────────────────────────────────────────────
+
+    def submit_inference(self, images: list[bytes], filenames: Optional[list[str]] = None) -> str:
+        """Envía hasta 10 imágenes al backend y retorna el job_id.
+
+        Args:
+            images: Lista de bytes de cada imagen (JPG o PNG).
+            filenames: Nombres de archivo opcionales para cada imagen.
+
+        Returns:
+            job_id (str) para usar en poll_results / get_download_links.
+
+        Raises:
+            APIClientError: Si ocurre un error de red o HTTP.
+        """
+        if not images:
+            raise APIClientError("Se requiere al menos una imagen")
+        if len(images) > 10:
+            raise APIClientError("Máximo 10 imágenes por lote")
+
+        names = filenames or [f"image_{i + 1}.jpg" for i in range(len(images))]
+        files = []
+        for i, (data, name) in enumerate(zip(images, names)):
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            mime = "image/png" if ext == "png" else "image/jpeg"
+            files.append(("files", (name, data, mime)))
+
+        url = f"{self.base_url}/api/v1/infer"
+        try:
+            resp = requests.post(
+                url,
+                headers=self._headers,
+                files=files,
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            return resp.json()["job_id"]
+        except requests.Timeout as exc:
+            raise APIClientError(f"Timeout enviando imágenes ({self.timeout}s)") from exc
+        except requests.ConnectionError as exc:
+            raise APIClientError(
+                f"No se pudo conectar al backend en {self.base_url}"
+            ) from exc
+        except requests.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.response.json().get("detail", "")
+            except Exception:
+                pass
+            raise APIClientError(
+                f"Error HTTP {exc.response.status_code}: {detail or exc}"
+            ) from exc
+        except Exception as exc:
+            raise APIClientError(f"Error inesperado al enviar imágenes: {exc}") from exc
+
+    # ── poll_results ───────────────────────────────────────────────────────
+
+    def poll_results(self, job_id: str) -> Dict[str, Any]:
+        """Consulta el estado actual del job.
+
+        Args:
+            job_id: ID retornado por submit_inference.
+
+        Returns:
+            Dict con keys: job_id, status, created_at, updated_at, message.
+            El campo ``status`` puede ser: submitted | running | completed | failed.
+
+        Raises:
+            APIClientError: Si ocurre un error de red o HTTP.
+        """
+        url = f"{self.base_url}/api/v1/jobs/{job_id}"
+        try:
+            resp = requests.get(url, headers=self._headers, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.Timeout as exc:
+            raise APIClientError(f"Timeout consultando job {job_id}") from exc
+        except requests.ConnectionError as exc:
+            raise APIClientError(
+                f"No se pudo conectar al backend en {self.base_url}"
+            ) from exc
+        except requests.HTTPError as exc:
+            raise APIClientError(
+                f"Error HTTP {exc.response.status_code} al consultar job"
+            ) from exc
+        except Exception as exc:
+            raise APIClientError(f"Error inesperado al consultar job: {exc}") from exc
+
+    # ── get_download_links ─────────────────────────────────────────────────
+
+    def get_download_links(self, job_id: str) -> Dict[str, Any]:
+        """Descarga los resultados completos con SAS URLs cuando el job está completo.
+
+        Args:
+            job_id: ID retornado por submit_inference.
+
+        Returns:
+            Dict con la estructura::
+
+                {
+                    "job_id": "...",
+                    "status": "completed",
+                    "timestamp": "...",
+                    "processing_time_ms": 398,
+                    "images": [
+                        {
+                            "filename": "image.jpg",
+                            "has_defects": true,
+                            "detection_count": 8,
+                            "confidence_avg": 0.85,
+                            "download_url": "https://...?sig=...",
+                            "detections": [...]
+                        }
+                    ],
+                    "summary": {
+                        "total_images": 4,
+                        "defective_images": 3,
+                        "total_defects": 11
+                    }
+                }
+
+        Raises:
+            APIClientError: Si el job aún no está completo o hay un error.
+        """
+        url = f"{self.base_url}/api/v1/jobs/{job_id}/results"
+        try:
+            resp = requests.get(url, headers=self._headers, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.Timeout as exc:
+            raise APIClientError(f"Timeout descargando resultados del job {job_id}") from exc
+        except requests.ConnectionError as exc:
+            raise APIClientError(
+                f"No se pudo conectar al backend en {self.base_url}"
+            ) from exc
+        except requests.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.response.json().get("detail", "")
+            except Exception:
+                pass
+            raise APIClientError(
+                f"Error HTTP {exc.response.status_code}: {detail or exc}"
+            ) from exc
+        except Exception as exc:
+            raise APIClientError(f"Error inesperado al obtener resultados: {exc}") from exc
+
