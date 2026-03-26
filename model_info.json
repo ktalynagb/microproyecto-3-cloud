@@ -1,0 +1,8 @@
+{
+  "name": "pcb-yolov8n",
+  "version": "1774551004",
+  "id": "/subscriptions/2a088410-37ec-472a-ae7e-09126fba02a6/resourceGroups/pcb-ml-rg/providers/Microsoft.MachineLearningServices/workspaces/pcb-ml-workspace/models/pcb-yolov8n/versions/1774551004",
+  "path": "azureml://datastores/workspaceblobstore/paths/pcb-results-20260326_134413/best.pt",
+  "job_name": "loyal_ear_18rz9bgjz3",
+  "timestamp": "2026-03-26 18:50:07.998278+00:00"
+}
