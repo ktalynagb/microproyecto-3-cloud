@@ -21,6 +21,7 @@ dependencies = [
     "reportlab>=4.2.0",
     # --- Configuración ---
     "python-dotenv>=1.0.0",
+    "datasets>=2.14.0",
     "huggingface-hub>=1.7.2",
     "azure-ai-ml>=1.32.0",
     "azure-identity>=1.25.3",

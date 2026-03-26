@@ -12,3 +12,5 @@ dependencies:
       - pandas
       - mlflow
       - azureml-mlflow
+      - datasets>=2.14.0          
+      - huggingface-hub>=1.7.2 

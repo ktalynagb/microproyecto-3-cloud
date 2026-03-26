@@ -212,7 +212,20 @@ uv run python deployment/azure/pipeline_azure.py
 > dataset [`keremberke/pcb-defect-segmentation`](https://huggingface.co/datasets/keremberke/pcb-defect-segmentation)
 > desde Hugging Face en el primer paso.
 
-El pipeline ejecuta los siguientes 4 pasos en Azure ML:
+El pipeline ejecuta los siguientes 4 códigos en Azure ML que corresponde a los siguientes pasos:
+
+| # | Nombre | Descripción |
+|---|--------|-------------|
+| 1 | **Import Data** | Ingesta de imágenes PCB desde Azure Blob Storage |
+| 2 | **Convert to Image Directory** | Conversión al formato ImageDirectory |
+| 3 | **Init Image Transformation** | Resize 640×640 + normalización ImageNet |
+| 4 | **Apply Transformation** | Aplica las transformaciones al dataset |
+| 5 | **Split Image Directory** | Partición 80% train / 20% test (seed=42) |
+| 6 | **Execute Python Script** | Carga YOLOv8n desde HuggingFace y configura fine-tuning |
+| 7 | **Train PyTorch Model** | Fine-tuning del modelo sobre el dataset PCB |
+| 8 | **Score Image Model** | Predicciones (bounding boxes + máscaras) sobre test |
+| 9 | **Evaluate Model** | Métricas: mAP, precisión y recall |
+| 10 | **Export Data** | Exporta modelo y resultados a Blob Storage |
 
 | # | Componente | Script | Descripción |
 |---|-----------|--------|-------------|
@@ -224,7 +237,7 @@ El pipeline ejecuta los siguientes 4 pasos en Azure ML:
 Monitorea el progreso en **Azure ML Studio**:
 <https://ml.azure.com>
 
-### 5.6 Nueva estructura de directorios (Azure)
+### 5.6 Estructura de directorios (Azure)
 
 ```
 deployment/azure/
