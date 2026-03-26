@@ -107,7 +107,15 @@ def main() -> None:
 
     model = YOLO(str(base_model_dst))
     
-    # ✅ Entrenar SIN parámetros inválidos
+    # ✅ Deshabilitar el callback de MLflow de Ultralytics
+    # Busca y elimina el callback mlflow si existe
+    if "mlflow" in model.callbacks:
+        del model.callbacks["mlflow"]
+    
+    # Alternativa: deshabilitar TODOS los callbacks excepto los que queremos
+    model.callbacks.clear()
+    
+    # ✅ Entrenar sin callbacks automáticos
     results = model.train(
         data=str(dataset_yaml),
         epochs=args.epochs,
