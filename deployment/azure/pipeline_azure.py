@@ -41,13 +41,12 @@ logger = logging.getLogger(__name__)
 # ── Rutas de referencia ──────────────────────────────────────────────────
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _CONFIG_FILE = _REPO_ROOT / "config.json"
-_CONDA_FILE = Path(__file__).resolve().parent / "conda.yml"
 _COMPONENTS_DIR = Path(__file__).resolve().parent / "components"
 
 # ── Constantes del pipeline ──────────────────────────────────────────────
 COMPUTE_NAME = "cpu-cluster-ds3"
 ENVIRONMENT_NAME = "pcb-yolo-env"
-ENVIRONMENT_VERSION = "6"
+ENVIRONMENT_VERSION = "7"
 PIPELINE_NAME = "pcb-defect-pipeline"
 EXPERIMENT_NAME = "pcb-defect-yolov8-finetuning"
 
