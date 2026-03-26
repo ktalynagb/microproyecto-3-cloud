@@ -25,6 +25,13 @@ Sistema de inspección de calidad basada en visión artificial para PCB
 6. [Despliegue – Azure Container Apps (Frontend Streamlit)](#6-despliegue--azure-container-apps-frontend-streamlit)
 7. [Despliegue – AWS ECS Fargate (Backend API)](#7-despliegue--aws-ecs-fargate-backend-api)
 8. [Variables de entorno](#8-variables-de-entorno)
+9. [Backend FastAPI + Azure ML Batch](#9-backend-fastapi--azure-ml-batch)
+   - 9.1 [Ejecutar backend local](#91-ejecutar-backend-local)
+   - 9.2 [Desplegar a ACI](#92-desplegar-a-aci)
+   - 9.3 [Endpoints de la API](#93-endpoints-de-la-api)
+   - 9.4 [Ejemplos de uso](#94-ejemplos-de-uso)
+   - 9.5 [Troubleshooting](#95-troubleshooting)
+   - 9.6 [Arquitectura](#96-arquitectura)
 
 ---
 
@@ -806,3 +813,174 @@ Si aparecen ❌, agrega los paquetes faltantes al Dockerfile y a `conda.yml`.
 | `Resize=640x640 \| Train=N \| Test=M` | `preprocess_split.py` | N+M = total imágenes |
 | `dataset.yaml generado en: ...` | `train_yolo.py` | Confirma rutas correctas |
 | `mAP@0.5=X` | `evaluate_model.py` | X > 0 si hay detecciones |
+
+---
+
+## 9. Backend FastAPI + Azure ML Batch
+
+El backend FastAPI actúa como intermediario entre el frontend Streamlit y el
+Azure ML Batch Endpoint.  Expone una API REST segura, sube imágenes al Blob
+Storage y gestiona el ciclo de vida de los jobs de inferencia.
+
+### 9.1 Ejecutar backend local
+
+```bash
+# 1. Instalar dependencias
+pip install -r deployment/api/requirements.txt
+
+# 2. Copiar y rellenar variables de entorno
+cp deployment/azure/.env.example deployment/azure/.env
+# Editar deployment/azure/.env con tus credenciales
+
+# 3. Cargar variables
+source deployment/azure/.env     # Linux/macOS
+# o en Windows PowerShell: Get-Content deployment/azure/.env | ForEach-Object { $v = $_ -split '=',2; if($v[0]) { [System.Environment]::SetEnvironmentVariable($v[0], $v[1]) } }
+
+# 4. Arrancar el servidor
+uvicorn deployment.api.backend:app --host 0.0.0.0 --port 8080 --reload
+```
+
+El servidor queda disponible en <http://localhost:8080>.
+Documentación interactiva: <http://localhost:8080/docs>
+
+**Con Docker (recomendado):**
+
+```bash
+cd deployment/azure
+docker-compose up --build
+```
+
+Esto levanta el backend en el puerto 8080 y el frontend Streamlit en el 8501.
+
+### 9.2 Desplegar a ACI
+
+```bash
+# 1. Configurar variables
+cp deployment/azure/.env.example deployment/azure/.env
+source deployment/azure/.env
+
+# 2. Ejecutar script de deploy
+bash deployment/azure/deploy_api.sh
+```
+
+El script:
+1. Crea (o reutiliza) un Azure Container Registry
+2. Construye y sube la imagen Docker
+3. Crea o actualiza un Azure Container Instance
+4. Muestra la URL pública al finalizar
+
+### 9.3 Endpoints de la API
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET`  | `/api/v1/health` | Health check (sin autenticación) |
+| `POST` | `/api/v1/infer` | Subir imágenes (hasta 10) y lanzar batch job |
+| `GET`  | `/api/v1/jobs/{job_id}` | Consultar estado del job |
+| `GET`  | `/api/v1/jobs/{job_id}/results` | Descargar resultados con SAS URLs |
+
+Todos los endpoints (excepto `/health`) requieren el header `X-API-Key`.
+
+### 9.4 Ejemplos de uso
+
+**Health check:**
+
+```bash
+curl http://localhost:8080/api/v1/health
+```
+
+**Enviar imágenes:**
+
+```bash
+curl -X POST http://localhost:8080/api/v1/infer \
+  -H "X-API-Key: $BACKEND_API_KEY" \
+  -F "files=@image1.jpg" \
+  -F "files=@image2.jpg"
+# → { "job_id": "uuid-xxx", "status": "submitted" }
+```
+
+**Consultar estado (polling cada 5s):**
+
+```bash
+curl http://localhost:8080/api/v1/jobs/uuid-xxx \
+  -H "X-API-Key: $BACKEND_API_KEY"
+# → { "job_id": "uuid-xxx", "status": "running" | "completed" | "failed" }
+```
+
+**Obtener resultados:**
+
+```bash
+curl http://localhost:8080/api/v1/jobs/uuid-xxx/results \
+  -H "X-API-Key: $BACKEND_API_KEY"
+```
+
+**Desde Python (AzureMLClient):**
+
+```python
+from app.api_client import AzureMLClient
+
+client = AzureMLClient(
+    backend_url="http://localhost:8080",
+    api_key="mi-api-key",
+)
+
+# Enviar imágenes
+with open("pcb.jpg", "rb") as f:
+    job_id = client.submit_inference([f.read()], filenames=["pcb.jpg"])
+
+# Polling
+import time
+while True:
+    status = client.poll_results(job_id)
+    print(status["status"])
+    if status["status"] in ("completed", "failed"):
+        break
+    time.sleep(5)
+
+# Resultados
+results = client.get_download_links(job_id)
+for img in results["images"]:
+    print(img["filename"], img["has_defects"], img["download_url"])
+```
+
+### 9.5 Troubleshooting
+
+| Síntoma | Causa probable | Solución |
+|---------|----------------|----------|
+| `403 API Key inválida` | `X-API-Key` incorrecto | Verifica `BACKEND_API_KEY` en `.env` |
+| `502 Error subiendo imágenes` | `AZURE_STORAGE_KEY` incorrecto | Verifica credenciales de storage |
+| `502 Error enviando job al Batch Endpoint` | `AZURE_ML_API_KEY` incorrecto | Obtén la key con `az ml batch-endpoint show-keys` |
+| `409 Job aún no completado` | Job en estado `running` | Espera y haz polling; el batch tarda 2-3 min |
+| `404 Job no encontrado` | El backend fue reiniciado (store en memoria) | Reenvía las imágenes |
+
+### 9.6 Arquitectura
+
+```
+┌─────────────────┐    X-API-Key    ┌──────────────────────┐
+│ Frontend        │ ──────────────► │ Backend FastAPI       │
+│ Streamlit       │                 │ (deployment/api/)     │
+│ (app/)          │ ◄────────────── │                       │
+└─────────────────┘   SAS URLs +    └──────────┬───────────┘
+                       resultados              │
+                                    ┌──────────┼───────────┐
+                                    │          │           │
+                              ┌─────▼──┐  ┌───▼──────┐
+                              │ Azure  │  │  Azure   │
+                              │  ML   │  │  Blob    │
+                              │ Batch │  │ Storage  │
+                              │ Endpt │  │          │
+                              └───────┘  └──────────┘
+```
+
+**Flujo:**
+1. Frontend sube imágenes → `POST /api/v1/infer`
+2. Backend sube imágenes al **Blob Storage** (input container)
+3. Backend lanza job en el **Azure ML Batch Endpoint**
+4. Frontend hace polling → `GET /api/v1/jobs/{job_id}` cada 5s
+5. Cuando el job termina, backend descarga el JSONL de resultados
+6. Backend genera **SAS URLs** (TTL 24h) para las imágenes anotadas
+7. Frontend muestra resultados con las SAS URLs
+
+**Rendimiento:**
+- Batch Endpoint: 2-3 minutos (normal con `min_instances=1`)
+- Real-time Endpoint (opcional): <1 segundo para cargas pequeñas
+- Backend response: <100ms (excluyendo tiempo en Azure)
