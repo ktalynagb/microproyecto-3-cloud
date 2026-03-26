@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _CONFIG_FILE = _REPO_ROOT / "config.json"
 _COMPONENTS_DIR = Path(__file__).resolve().parent / "components"
+_BATCH_INFERENCE_DIR = Path(__file__).resolve().parent / "batch_inference"
 
 # ── Constantes del pipeline ──────────────────────────────────────────────
 COMPUTE_NAME = "cpu-cluster-ds3"
@@ -311,8 +312,8 @@ def _register_batch_endpoint(ml_client: MLClient, model_output_path: str) -> Non
         endpoint_name=BATCH_ENDPOINT_NAME,
         model=registered_model.id,
         code_configuration=CodeConfiguration(
-            code=str(_COMPONENTS_DIR),
-            scoring_script="batch_inference.py",
+            code=str(_BATCH_INFERENCE_DIR),
+            scoring_script="score.py",
         ),
         environment=_ENV_REF,
         compute=COMPUTE_NAME,

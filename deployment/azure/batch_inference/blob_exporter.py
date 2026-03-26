@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from batch_inference import BatchResult
+from inference_engine import BatchResult
 from batch_receiver import Batch
 from config import config
 from logger import get_logger

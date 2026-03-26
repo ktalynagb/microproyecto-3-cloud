@@ -1,10 +1,10 @@
-"""ETAPA 2: Inferencia por lote (batch_inference).
+"""ETAPA 2: Inferencia por lote (inference_engine).
 
 Ejecuta el modelo YOLOv8n registrado sobre cada imagen del lote y retorna
 detecciones con clase, bounding box, máscara/contorno y confidence.
 
 Uso como módulo:
-    from batch_inference import BatchInference
+    from inference_engine import BatchInference
     engine = BatchInference(model_path="best.pt")
     results = engine.run(batch)
 """

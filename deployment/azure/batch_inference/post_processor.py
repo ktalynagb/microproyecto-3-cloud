@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from batch_inference import BatchResult, Detection, ImageResult
+from inference_engine import BatchResult, Detection, ImageResult
 from batch_receiver import Batch
 from config import config
 from logger import get_logger
