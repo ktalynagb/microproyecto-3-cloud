@@ -19,7 +19,8 @@ Sistema de inspección de calidad basada en visión artificial para PCB
    - 5.2 [Actualizar config.json](#52-actualizar-configjson)
    - 5.3 [Instalar la extensión Azure ML CLI en Windows](#53-instalar-la-extensión-azure-ml-cli-en-windows)
    - 5.4 [Crear la infraestructura de cómputo](#54-crear-la-infraestructura-de-cómputo)
-   - 5.5 [Ejecutar el pipeline de 10 pasos](#55-ejecutar-el-pipeline-de-10-pasos)
+   - 5.5 [Ejecutar el pipeline modular](#55-ejecutar-el-pipeline-modular)
+   - 5.6 [Nueva estructura de directorios (Azure)](#56-nueva-estructura-de-directorios-azure)
 6. [Despliegue – Azure Container Apps (Frontend)](#6-despliegue--azure-container-apps-frontend)
 7. [Despliegue – AWS ECS Fargate (Backend API)](#7-despliegue--aws-ecs-fargate-backend-api)
 8. [Variables de entorno](#8-variables-de-entorno)
@@ -200,34 +201,46 @@ Clúster creado con éxito.
 Infraestructura de cómputo lista para la sustentación.
 ```
 
-### 5.5 Ejecutar el pipeline de 10 pasos
+### 5.5 Ejecutar el pipeline modular
 
 ```powershell
-# Ejecutar el pipeline completo de 10 pasos (YOLOv8n fine-tuning)
+# Ejecutar el pipeline completo (YOLOv8n fine-tuning, descarga HF automática)
 uv run python deployment/azure/pipeline_azure.py
-
-# Especificar una URI de datos personalizada (opcional)
-uv run python deployment/azure/pipeline_azure.py `
-  --data_uri "azureml://datastores/workspaceblobstore/paths/pcb-data/"
 ```
 
-El pipeline ejecuta los siguientes 10 pasos en Azure ML:
+> **Sin dataset local requerido:** el pipeline descarga automáticamente el
+> dataset [`keremberke/pcb-defect-segmentation`](https://huggingface.co/datasets/keremberke/pcb-defect-segmentation)
+> desde Hugging Face en el primer paso.
 
-| # | Nombre | Descripción |
-|---|--------|-------------|
-| 1 | **Import Data** | Ingesta de imágenes PCB desde Azure Blob Storage |
-| 2 | **Convert to Image Directory** | Conversión al formato ImageDirectory |
-| 3 | **Init Image Transformation** | Resize 640×640 + normalización ImageNet |
-| 4 | **Apply Transformation** | Aplica las transformaciones al dataset |
-| 5 | **Split Image Directory** | Partición 80% train / 20% test (seed=42) |
-| 6 | **Execute Python Script** | Carga YOLOv8n desde HuggingFace y configura fine-tuning |
-| 7 | **Train PyTorch Model** | Fine-tuning del modelo sobre el dataset PCB |
-| 8 | **Score Image Model** | Predicciones (bounding boxes + máscaras) sobre test |
-| 9 | **Evaluate Model** | Métricas: mAP, precisión y recall |
-| 10 | **Export Data** | Exporta modelo y resultados a Blob Storage |
+El pipeline ejecuta los siguientes 4 pasos en Azure ML:
+
+| # | Componente | Script | Descripción |
+|---|-----------|--------|-------------|
+| 1 | **Ingest Data** | `components/ingest_data.py` | Descarga el dataset PCB desde Hugging Face |
+| 2 | **Preprocess & Split** | `components/preprocess_split.py` | Resize 640×640 + partición 80% train / 20% test (seed=42) |
+| 3 | **Train YOLOv8n** | `components/train_yolo.py` | Fine-tuning del modelo con registro MLflow |
+| 4 | **Evaluate Model** | `components/evaluate_model.py` | Inferencia, métricas (mAP) y exportación a Blob Storage |
 
 Monitorea el progreso en **Azure ML Studio**:
 <https://ml.azure.com>
+
+### 5.6 Nueva estructura de directorios (Azure)
+
+```
+deployment/azure/
+├── pipeline_azure.py          # Orquestador del pipeline (@dsl.pipeline)
+├── deploy_azure.py            # Crea la infraestructura de cómputo
+├── conda.yml                  # Entorno Conda registrado en Azure ML
+├── components/                # Scripts independientes de cada paso
+│   ├── ingest_data.py         # Paso 1: descarga dataset desde Hugging Face
+│   ├── preprocess_split.py    # Paso 2: transformación + partición 80/20
+│   ├── train_yolo.py          # Paso 3: fine-tuning YOLOv8n con MLflow
+│   └── evaluate_model.py      # Paso 4: inferencia, mAP y exportación
+└── scripts/                   # Scripts heredados (referencia interna)
+```
+
+Cada componente en `components/` acepta argumentos `--input_data` y
+`--output_data` que Azure ML inyecta dinámicamente al conectar los pasos.
 
 ---
 
