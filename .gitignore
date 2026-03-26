@@ -27,6 +27,12 @@ logs/
 # Proyecto específico
 proto/generated/
 
-# Variables de entorno (permitir .env en desarrollo; ignorar variantes de producción)
+# Variables de entorno (NO commitear secrets)
+.env
 .env.production
 .env.local
+
+# Cache de datasets
+.cache/
+datasets--*/
+*.roboflow/

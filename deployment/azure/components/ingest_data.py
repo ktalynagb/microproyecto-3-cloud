@@ -1,31 +1,65 @@
-"""Componente 1: Ingest Data - Descarga el dataset PCB desde Hugging Face.
+"""Componente 1: Ingest Data - Descarga el dataset PCB desde Roboflow.
 
-El dataset keremberke/pcb-defect-segmentation tiene 4 clases:
-  0: dry_joint, 1: incorrect_installation, 2: pcb_damage, 3: short_circuit
+Usa Roboflow como fuente primaria (requiere ROBOFLOW_API_KEY) y descarga el
+dataset `diplom-qz7q6/defects-2q87r` versión 8 en formato YOLOv8, que incluye
+imágenes y labels listos para entrenamiento.
 
-Genera labels en formato YOLO segmentación cuando el dataset incluye polígonos,
-o en formato YOLO detección (bbox) como fallback.
+Clases del dataset (4 clases, índices 0-3):
+  0: Dry_joint, 1: Incorrect_installation, 2: PCB_damage, 3: Short_circuit
+
+Fallback: si ROBOFLOW_API_KEY no está definida, intenta descargar desde
+Hugging Face (keremberke/pcb-defect-segmentation).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 from pathlib import Path
 
-# Clases correctas del dataset (4 clases, índices 0-3)
+# Clases correctas del dataset Roboflow (4 clases, índices 0-3)
 CLASSES = {
-    "0": "dry_joint",
-    "1": "incorrect_installation",
-    "2": "pcb_damage",
-    "3": "short_circuit",
+    "0": "Dry_joint",
+    "1": "Incorrect_installation",
+    "2": "PCB_damage",
+    "3": "Short_circuit",
 }
 NC = 4
 
+# Configuración del dataset Roboflow
+ROBOFLOW_WORKSPACE = "diplom-qz7q6"
+ROBOFLOW_PROJECT = "defects-2q87r"
+ROBOFLOW_VERSION = 8
+VALID_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
+
+
+def check_dependencies() -> None:
+    """Valida que las librerías necesarias estén instaladas antes de ejecutar."""
+    required = {
+        "roboflow": "Descargar dataset desde Roboflow",
+        "huggingface_hub": "Fallback: descargar desde Hugging Face",
+    }
+    missing = []
+    for lib, reason in required.items():
+        try:
+            __import__(lib)
+        except ImportError:
+            missing.append(f"  - {lib}: {reason}")
+    if missing:
+        # No lanzar error si roboflow falta pero HF puede funcionar como fallback
+        # Solo informar
+        print(
+            "[ingest_data] ⚠️ Algunas dependencias opcionales no están instaladas:\n"
+            + "\n".join(missing)
+        )
+
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Descarga el dataset PCB desde Hugging Face.")
+    parser = argparse.ArgumentParser(
+        description="Descarga el dataset PCB desde Roboflow (o Hugging Face como fallback)."
+    )
     parser.add_argument(
         "--output_data",
         type=str,
@@ -33,6 +67,104 @@ def parse_args() -> argparse.Namespace:
         help="Ruta de salida donde se guardarán las imágenes y anotaciones.",
     )
     return parser.parse_args()
+
+
+def _validate_yolo_label(label_path: Path) -> bool:
+    """Verifica que un archivo .txt tiene formato YOLO válido (mínimo 5 valores por línea)."""
+    try:
+        lines = label_path.read_text(encoding="utf-8").strip().splitlines()
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) < 5:
+                return False
+            int(parts[0])  # class_id must be an integer
+        return True
+    except Exception:
+        return False
+
+
+def _find_dataset_root(output_dir: Path) -> Path:
+    """Encuentra el directorio raíz del dataset (puede ser un subdirectorio de output_dir)."""
+    if (output_dir / "train" / "images").exists():
+        return output_dir
+    for sub in sorted(output_dir.iterdir()):
+        if sub.is_dir() and sub.name != ".cache" and (sub / "train" / "images").exists():
+            return sub
+    return output_dir
+
+
+def _count_and_validate_splits(data_root: Path) -> dict[str, int]:
+    """Cuenta imágenes y valida que existan labels YOLO en cada split."""
+    splits_written: dict[str, int] = {}
+    for split in ("train", "valid", "test"):
+        img_dir = data_root / split / "images"
+        lbl_dir = data_root / split / "labels"
+        if not img_dir.exists():
+            continue
+
+        images = [
+            f for f in img_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in VALID_IMAGE_EXT
+        ]
+        labels = list(lbl_dir.glob("*.txt")) if lbl_dir.exists() else []
+
+        # Validar correspondencia imagen-label
+        valid_labels = [lbl for lbl in labels if _validate_yolo_label(lbl)]
+        splits_written[split] = len(images)
+        print(
+            f"[ingest_data] Split '{split}': {len(images)} imágenes, "
+            f"{len(valid_labels)} labels YOLO válidos en {img_dir}"
+        )
+        if len(images) != len(labels):
+            print(
+                f"[ingest_data] ⚠️ Discrepancia en split '{split}': "
+                f"{len(images)} imágenes ≠ {len(labels)} labels"
+            )
+        elif len(valid_labels) < len(labels):
+            print(
+                f"[ingest_data] ⚠️ {len(labels) - len(valid_labels)} labels inválidos "
+                f"en split '{split}'"
+            )
+
+    return splits_written
+
+
+def _ingest_via_roboflow(output_dir: Path, api_key: str) -> dict[str, int]:
+    """Descarga el dataset PCB desde Roboflow en formato YOLOv8.
+
+    Descarga workspace/project/version definido por las constantes del módulo.
+    Retorna dict con {split_name: num_imágenes}.
+    """
+    from roboflow import Roboflow
+
+    print(
+        f"[ingest_data] Conectando a Roboflow: "
+        f"{ROBOFLOW_WORKSPACE}/{ROBOFLOW_PROJECT} v{ROBOFLOW_VERSION}"
+    )
+    rf = Roboflow(api_key=api_key)
+    project = rf.workspace(ROBOFLOW_WORKSPACE).project(ROBOFLOW_PROJECT)
+    version = project.version(ROBOFLOW_VERSION)
+
+    print(f"[ingest_data] Descargando dataset en formato YOLOv8...")
+    dataset = version.download("yolov8", location=str(output_dir), overwrite=True)
+    actual_dir = Path(dataset.location)
+    print(f"[ingest_data] Dataset descargado en: {actual_dir}")
+
+    # Si Roboflow creó un subdirectorio, mover los contenidos al output_dir raíz
+    if actual_dir.resolve() != output_dir.resolve() and actual_dir.parent.resolve() == output_dir.resolve():
+        print(f"[ingest_data] Moviendo datos de {actual_dir} → {output_dir}")
+        for item in actual_dir.iterdir():
+            dest = output_dir / item.name
+            if not dest.exists():
+                shutil.move(str(item), str(dest))
+        try:
+            actual_dir.rmdir()
+        except OSError:
+            pass  # ignorar si no está vacío
+
+    data_root = _find_dataset_root(output_dir)
+    return _count_and_validate_splits(data_root)
+
 
 
 def _polygon_to_yolo_seg(segmentation: list, width: int, height: int) -> str | None:
@@ -159,42 +291,65 @@ def _ingest_via_zip(output_dir: Path, zip_files: list[str]) -> bool:
 
 
 def main() -> None:
+    check_dependencies()
     args = parse_args()
     output_dir = Path(args.output_data)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("[ingest_data] Descargando dataset: keremberke/pcb-defect-segmentation")
-
-    from huggingface_hub import list_repo_files
-
-    repo_id = "keremberke/pcb-defect-segmentation"
-    print(f"[ingest_data] Listando archivos del repositorio {repo_id}...")
-    files = list(list_repo_files(repo_id=repo_id, repo_type="dataset"))
-    print(f"[ingest_data] Archivos encontrados: {files}")
-
-    zip_files = [f for f in files if f.endswith(".zip")]
+    api_key = os.environ.get("ROBOFLOW_API_KEY", "").strip()
 
     splits_written: dict[str, int] = {}
-    if zip_files:
-        _ingest_via_zip(output_dir, zip_files)
-        # Contar imágenes por split en la estructura extraída
-        for split in ("train", "valid", "test"):
-            img_dir = output_dir / split / "images"
-            if not img_dir.exists():
-                # Algunos zips extraen con un subdirectorio raíz
-                candidates = list(output_dir.rglob(f"{split}/images"))
-                if candidates:
-                    img_dir = candidates[0]
-            if img_dir.exists():
-                count = len(list(img_dir.glob("*")))
-                splits_written[split] = count
-                print(f"[ingest_data] Split '{split}': {count} imágenes en {img_dir}")
+
+    if api_key:
+        print(f"[ingest_data] ROBOFLOW_API_KEY detectada. Descargando desde Roboflow...")
+        splits_written = _ingest_via_roboflow(output_dir, api_key)
+        source = f"roboflow:{ROBOFLOW_WORKSPACE}/{ROBOFLOW_PROJECT}/v{ROBOFLOW_VERSION}"
     else:
-        splits_written = _ingest_via_load_dataset(output_dir)
+        print(
+            "[ingest_data] ⚠️ ROBOFLOW_API_KEY no definida. "
+            "Usando fallback Hugging Face (keremberke/pcb-defect-segmentation)."
+        )
+        print(
+            "[ingest_data] Para mejor calidad de datos, define ROBOFLOW_API_KEY "
+            "y usa el dataset de Roboflow (ver README.md sección 8)."
+        )
+        print("[ingest_data] Descargando dataset: keremberke/pcb-defect-segmentation")
+
+        from huggingface_hub import list_repo_files
+
+        repo_id = "keremberke/pcb-defect-segmentation"
+        print(f"[ingest_data] Listando archivos del repositorio {repo_id}...")
+        files = list(list_repo_files(repo_id=repo_id, repo_type="dataset"))
+        print(f"[ingest_data] Archivos encontrados: {files}")
+
+        zip_files = [f for f in files if f.endswith(".zip")]
+
+        if zip_files:
+            # Descargar todos los zips de splits (train, valid, test)
+            for zf in zip_files:
+                try:
+                    _ingest_via_zip(output_dir, [zf])
+                except Exception as exc:
+                    print(f"[ingest_data] ⚠️ Error descargando {zf}: {exc}")
+            # Contar imágenes por split en la estructura extraída
+            for split in ("train", "valid", "test"):
+                img_dir = output_dir / split / "images"
+                if not img_dir.exists():
+                    candidates = list(output_dir.rglob(f"{split}/images"))
+                    if candidates:
+                        img_dir = candidates[0]
+                if img_dir.exists():
+                    count = len(list(img_dir.glob("*")))
+                    splits_written[split] = count
+                    print(f"[ingest_data] Split '{split}': {count} imágenes en {img_dir}")
+        else:
+            splits_written = _ingest_via_load_dataset(output_dir)
+
+        source = repo_id
 
     # Guardar metadatos con clases correctas (4 clases)
     metadata = {
-        "source": repo_id,
+        "source": source,
         "splits": splits_written,
         "nc": NC,
         "classes": CLASSES,
