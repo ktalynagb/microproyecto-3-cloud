@@ -54,6 +54,40 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _find_dataset_yaml(model_dir: Path, test_dir: Path, output_dir: Path) -> Path | None:
+    """Localiza o genera un dataset.yaml para la evaluación oficial con YOLO.
+
+    Busca en model_dir; si no existe, genera uno mínimo apuntando al test set.
+    """
+    yaml_path = model_dir / "dataset.yaml"
+    if yaml_path.exists():
+        return yaml_path
+
+    # Leer resumen de entrenamiento para obtener clases y nc
+    summary_path = model_dir / "training_summary.json"
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        nc = summary.get("nc", 4)
+        classes = summary.get("classes", ["dry_joint", "incorrect_installation", "pcb_damage", "short_circuit"])
+    else:
+        nc = 4
+        classes = ["dry_joint", "incorrect_installation", "pcb_damage", "short_circuit"]
+
+    names_block = "\n".join(f"  {i}: {name}" for i, name in enumerate(classes))
+    images_dir = test_dir / "images" if (test_dir / "images").exists() else test_dir
+    content = (
+        f"path: {test_dir}\n"
+        f"train: images\n"
+        f"val: {images_dir}\n"
+        f"nc: {nc}\n"
+        f"names:\n{names_block}\n"
+    )
+    yaml_path = output_dir / "eval_dataset.yaml"
+    yaml_path.write_text(content, encoding="utf-8")
+    print(f"[evaluate_model] dataset.yaml generado para evaluación: {yaml_path}")
+    return yaml_path
+
+
 def main() -> None:
     args = parse_args()
     test_dir = Path(args.input_data)
@@ -127,10 +161,12 @@ def main() -> None:
     map50 = 0.0
     map50_95 = 0.0
     try:
-        val_results = model.val(data=str(model_dir / "dataset.yaml"), conf=args.conf_threshold)
-        map50 = float(val_results.box.map50)
-        map50_95 = float(val_results.box.map)
-        print(f"[evaluate_model] mAP@0.5={map50:.4f} | mAP@0.5:0.95={map50_95:.4f}")
+        yaml_path = _find_dataset_yaml(model_dir, test_dir, output_dir)
+        if yaml_path:
+            val_results = model.val(data=str(yaml_path), conf=args.conf_threshold)
+            map50 = float(val_results.box.map50)
+            map50_95 = float(val_results.box.map)
+            print(f"[evaluate_model] mAP@0.5={map50:.4f} | mAP@0.5:0.95={map50_95:.4f}")
     except Exception as exc:
         print(f"[evaluate_model] No se pudo calcular mAP oficial: {exc}")
 
