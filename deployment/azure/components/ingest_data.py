@@ -36,7 +36,11 @@ def main() -> None:
 
     from datasets import load_dataset
 
-    dataset = load_dataset("keremberke/pcb-defect-segmentation", name="full")
+    dataset = load_dataset(
+    "keremberke/pcb-defect-segmentation",
+    name="full",
+    trust_remote_code=True 
+    )
 
     splits_written: dict[str, int] = {}
     for split_name, split_data in dataset.items():
