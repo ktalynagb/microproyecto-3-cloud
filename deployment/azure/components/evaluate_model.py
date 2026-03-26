@@ -112,14 +112,43 @@ def _find_dataset_yaml(model_dir: Path, test_dir: Path, output_dir: Path) -> Pat
 
 
 def main() -> None:
+    import shutil
+    from datetime import datetime
+    from pathlib import Path
+    
     args = parse_args()
     test_dir = Path(args.input_data)
     model_dir = Path(args.model_data)
     output_dir = Path(args.output_data)
 
-    annotated_dir = output_dir / "annotated_images"
+    print("[evaluate_model] " + "=" * 60)
+    print(f"[evaluate_model] Iniciando evaluación del modelo")
+    print(f"[evaluate_model] Entrada (test): {test_dir}")
+    print(f"[evaluate_model] Modelo: {model_dir}")
+    print(f"[evaluate_model] Salida: {output_dir}")
+    print("[evaluate_model] " + "=" * 60)
+
+    # ✅ AGREGAR: Limpiar carpeta de output si existe
+    print("[evaluate_model] Limpiando carpeta de output anterior...")
+    if output_dir.exists():
+        try:
+            # Eliminar archivos viejos pero mantener la carpeta
+            for item in output_dir.iterdir():
+                if item.is_file():
+                    item.unlink()
+                    print(f"[evaluate_model] ✓ Eliminado: {item.name}")
+                elif item.is_dir():
+                    shutil.rmtree(item)
+                    print(f"[evaluate_model] ✓ Eliminada carpeta: {item.name}")
+        except Exception as e:
+            print(f"[evaluate_model] ⚠️ Error limpiando: {e}")
+    
+    # Crear directorios limpios
     output_dir.mkdir(parents=True, exist_ok=True)
+    annotated_dir = output_dir / "annotated_images"
     annotated_dir.mkdir(parents=True, exist_ok=True)
+
+    print("[evaluate_model] Carpeta de output lista (limpia)")
 
     model_file = model_dir / "best.pt"
     if not model_file.exists():
@@ -129,6 +158,7 @@ def main() -> None:
     import mlflow
     from ultralytics import YOLO
 
+    print(f"[evaluate_model] Cargando modelo: {model_file}")
     model = YOLO(str(model_file))
 
     # Inferencia sobre el conjunto de prueba
@@ -138,8 +168,12 @@ def main() -> None:
         if f.is_file() and f.suffix.lower() in VALID_IMAGE_EXT
     ]
 
+    print(f"[evaluate_model] Procesando {len(images)} imágenes...")
+
     predictions: list[dict] = []
-    for img_path in images:
+    for idx, img_path in enumerate(images, 1):
+        print(f"[evaluate_model] [{idx}/{len(images)}] Procesando: {img_path.name}")
+        
         results = model(str(img_path), conf=args.conf_threshold)
         annotated = results[0].plot()
         cv2.imwrite(str(annotated_dir / img_path.name), annotated)
@@ -165,10 +199,12 @@ def main() -> None:
             }
         )
 
-    (output_dir / "predictions.json").write_text(
+    # Guardar predicciones
+    predictions_file = output_dir / "predictions.json"
+    predictions_file.write_text(
         json.dumps(predictions, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    print(f"[evaluate_model] Inferencia: {len(images)} imágenes procesadas.")
+    print(f"[evaluate_model] ✓ Predicciones guardadas: {predictions_file}")
 
     # Calcular métricas de resumen
     total = len(predictions)
@@ -186,14 +222,16 @@ def main() -> None:
     try:
         yaml_path = _find_dataset_yaml(model_dir, test_dir, output_dir)
         if yaml_path:
+            print(f"[evaluate_model] Calculando mAP con: {yaml_path}")
             val_results = model.val(data=str(yaml_path), conf=args.conf_threshold)
             map50 = float(val_results.box.map50)
             map50_95 = float(val_results.box.map)
-            print(f"[evaluate_model] mAP@0.5={map50:.4f} | mAP@0.5:0.95={map50_95:.4f}")
+            print(f"[evaluate_model] ✓ mAP@0.5={map50:.4f} | mAP@0.5:0.95={map50_95:.4f}")
     except Exception as exc:
-        print(f"[evaluate_model] No se pudo calcular mAP oficial: {exc}")
+        print(f"[evaluate_model] ⚠️ No se pudo calcular mAP oficial: {exc}")
 
     metrics = {
+        "timestamp": datetime.now().isoformat(),  # ✅ AGREGAR TIMESTAMP
         "total_images_evaluated": total,
         "images_with_defects": with_defects,
         "images_without_defects": total - with_defects,
@@ -206,20 +244,34 @@ def main() -> None:
     # Registrar métricas con MLflow
     mlflow.start_run()
     for k, v in metrics.items():
-        mlflow.log_metric(k, v)
+        if isinstance(v, (int, float)):
+            mlflow.log_metric(k, v)
+        else:
+            mlflow.log_param(k, str(v))
 
-    (output_dir / "metrics.json").write_text(
+    metrics_file = output_dir / "metrics.json"
+    metrics_file.write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    print(f"[evaluate_model] Métricas: {metrics}")
+    print(f"[evaluate_model] ✓ Métricas: {metrics}")
 
     # Exportar modelo al directorio de resultados
+    model_output = output_dir / "best.pt"
     if model_file.exists():
-        shutil.copy2(model_file, output_dir / "best.pt")
-        print(f"[evaluate_model] Modelo exportado: {output_dir / 'best.pt'}")
+        shutil.copy2(model_file, model_output)
+        print(f"[evaluate_model] ✓ Modelo exportado: {model_output}")
 
     mlflow.end_run()
-    print(f"[evaluate_model] Resultados completos en: {output_dir}")
+    
+    print("[evaluate_model] " + "=" * 60)
+    print(f"[evaluate_model] ✅ EVALUACIÓN COMPLETADA")
+    print(f"[evaluate_model] Resultados en: {output_dir}")
+    print(f"[evaluate_model] Archivos generados:")
+    print(f"[evaluate_model]   - predictions.json")
+    print(f"[evaluate_model]   - metrics.json")
+    print(f"[evaluate_model]   - best.pt")
+    print(f"[evaluate_model]   - annotated_images/ ({len(images)} imágenes)")
+    print("[evaluate_model] " + "=" * 60)
 
 
 if __name__ == "__main__":

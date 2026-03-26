@@ -56,7 +56,7 @@ PIPELINE_NAME = "pcb-defect-pipeline"
 EXPERIMENT_NAME = "pcb-defect-yolov8-finetuning"
 
 # Hiperparámetros de fine-tuning
-FINETUNE_EPOCHS = 50
+FINETUNE_EPOCHS = 10
 FINETUNE_IMGSZ = 640
 FINETUNE_BATCH = 16
 FINETUNE_LR0 = 0.01
