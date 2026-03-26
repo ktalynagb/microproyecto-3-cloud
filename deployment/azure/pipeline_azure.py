@@ -120,22 +120,26 @@ def _ensure_compute(ml_client: MLClient) -> None:
 
 
 def _ensure_environment(ml_client: MLClient) -> None:
-    """Registra el entorno Conda definido en conda.yml si no existe."""
+    """Registra el entorno desde el Dockerfile si no existe."""
     env_tag = f"{ENVIRONMENT_NAME}:{ENVIRONMENT_VERSION}"
     try:
         ml_client.environments.get(ENVIRONMENT_NAME, version=ENVIRONMENT_VERSION)
         logger.info("Entorno '%s' ya está registrado.", env_tag)
     except Exception:
-        logger.info("Registrando entorno '%s' desde %s...", env_tag, _CONDA_FILE)
+        logger.info("Registrando entorno '%s' desde Dockerfile...", env_tag)
+        dockerfile_path = Path(__file__).resolve().parent / "Dockerfile"
+        
+        if not dockerfile_path.exists():
+            raise FileNotFoundError(f"Dockerfile no encontrado en {dockerfile_path}")
+        
         env = Environment(
             name=ENVIRONMENT_NAME,
             version=ENVIRONMENT_VERSION,
-            description="Entorno Conda para pipeline YOLOv8 PCB - Flux Solutions Cali",
-            dockerfile=str(Path(__file__).resolve().parent / "Dockerfile"),
-            conda_file=str(_CONDA_FILE),
+            description="Entorno para pipeline YOLOv8 PCB - Dockerfile + Conda",
+            dockerfile=str(dockerfile_path),
         )
         ml_client.environments.create_or_update(env)
-        logger.info("Entorno '%s' registrado.", env_tag)
+        logger.info("Entorno '%s' registrado desde Dockerfile.", env_tag)
 
 
 # ── 3. Definición de los componentes ────────────────────────────────────
