@@ -85,8 +85,9 @@ def main() -> None:
     )
     print(f"[train_yolo] dataset.yaml generado en: {dataset_yaml}")
 
-    # Registrar hiperparámetros con MLflow y ejecutar fine-tuning
+    # Registrar hiperparámetros con MLflow
     import mlflow
+    from ultralytics import YOLO
 
     mlflow.start_run()
     mlflow.log_params(
@@ -100,9 +101,13 @@ def main() -> None:
         }
     )
 
-    from ultralytics import YOLO
+    # ✅ DESACTIVAR MLflow callback de Ultralytics para evitar conflicto con Azure ML
+    import os
+    os.environ["YOLO_VERBOSE"] = "False"
 
     model = YOLO(str(base_model_dst))
+    
+    # ✅ Entrenar SIN callbacks de MLflow automático
     results = model.train(
         data=str(dataset_yaml),
         epochs=args.epochs,
@@ -113,13 +118,18 @@ def main() -> None:
         project=str(output_dir),
         name="yolov8n_pcb_finetune",
         exist_ok=True,
+        # ✅ Deshabilitar MLflow callback
+        disable_callbacks=True,  # Esto previene que Ultralytics logge automáticamente
     )
 
-    # Registrar métricas finales con MLflow
+    print(f"[train_yolo] Entrenamiento completado")
+
+    # Registrar métricas finales con MLflow MANUALMENTE
     if hasattr(results, "results_dict"):
         for k, v in results.results_dict.items():
             try:
                 mlflow.log_metric(k, float(v))
+                print(f"[train_yolo] Métrica registrada: {k}={v}")
             except (TypeError, ValueError):
                 pass
 
