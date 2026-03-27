@@ -59,6 +59,7 @@ class AzureMLBatchClient:
         self.endpoint_url: str = endpoint_url or os.environ.get(
             "AZURE_ML_BATCH_ENDPOINT_URL", _DEFAULT_BATCH_URL
         )
+        # ✅ Intentar obtener el token del .env primero
         self.api_key: str = api_key or os.environ.get("AZURE_ML_API_KEY", "")
         self.timeout = timeout
         self._token_cache: Optional[str] = None
@@ -157,20 +158,10 @@ class AzureMLBatchClient:
             "Content-Type": "application/json",
         }
 
-    # ── Submit job ─────────────────────────────────────────────────────────
+    # ── Submit job ────────────────────────────────────��────────────────────
 
     def submit_job(self, input_data_url: str) -> str:
-        """Envía un trabajo al Batch Endpoint y retorna el job_id.
-
-        Args:
-            input_data_url: URL del blob con las imágenes de entrada.
-
-        Returns:
-            ID del job creado.
-
-        Raises:
-            requests.HTTPError: Si el endpoint devuelve un error HTTP.
-        """
+        """Envía un trabajo al Batch Endpoint y retorna el job_id."""
         payload = {
             "properties": {
                 "InputData": {
@@ -201,19 +192,12 @@ class AzureMLBatchClient:
                     raise
                 time.sleep(_RETRY_BACKOFF * attempt)
 
-        return ""  # unreachable
+        return ""
 
     # ── Job status ─────────────────────────────────────────────────────────
 
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
-        """Consulta el estado de un job.
-
-        Args:
-            job_id: ID del job.
-
-        Returns:
-            Dict con keys: job_id, status, created_at, updated_at, message.
-        """
+        """Consulta el estado de un job."""
         url = f"{self.endpoint_url}/{job_id}"
 
         for attempt in range(1, _MAX_RETRIES + 1):
@@ -241,19 +225,12 @@ class AzureMLBatchClient:
                     raise
                 time.sleep(_RETRY_BACKOFF * attempt)
 
-        return {}  # unreachable
+        return {}
 
-    # ── Get output URL ─────────────────────────────────────────────────────
+    # ── Get output URL ─────────────────────────────────────────���───────────
 
     def get_output_url(self, job_id: str) -> Optional[str]:
-        """Retorna la URL del output folder del job (si está disponible).
-
-        Args:
-            job_id: ID del job completado.
-
-        Returns:
-            URL del folder de output o None si aún no está disponible.
-        """
+        """Retorna la URL del output folder del job."""
         url = f"{self.endpoint_url}/{job_id}"
         try:
             resp = requests.get(url, headers=self._headers, timeout=self.timeout)
@@ -261,7 +238,6 @@ class AzureMLBatchClient:
             data = resp.json()
             props = data.get("properties", data)
             outputs = props.get("outputs", {})
-            # El output default se llama "score" o "default"
             for key in ("score", "default"):
                 if key in outputs:
                     return outputs[key].get("uri")
@@ -272,14 +248,7 @@ class AzureMLBatchClient:
     # ── Download JSONL results ─────────────────────────────────────────────
 
     def download_results(self, results_url: str) -> List[Dict[str, Any]]:
-        """Descarga y parsea el archivo JSONL de resultados.
-
-        Args:
-            results_url: URL directa al archivo .jsonl.
-
-        Returns:
-            Lista de dicts, uno por imagen.
-        """
+        """Descarga y parsea el archivo JSONL de resultados."""
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 resp = requests.get(
@@ -303,13 +272,11 @@ class AzureMLBatchClient:
                     raise
                 time.sleep(_RETRY_BACKOFF * attempt)
 
-        return []  # unreachable
+        return []
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _normalize_status(raw: str) -> str:
-    """Normaliza el estado devuelto por Azure ML a un valor canónico."""
+    """Normaliza el estado devuelto por Azure ML."""
     mapping = {
         "notstarted": "submitted",
         "queued": "submitted",
