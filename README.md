@@ -957,6 +957,7 @@ docker-compose down
 5. Un **Azure Container Registry (ACR)** creado:
    ```powershell
    az acr create --name pcbmlacr --resource-group pcb-ml-rg --sku Basic
+   az acr update -n pcbmlacr --admin-enabled true
    ```
 
 #### Paso a paso con `deploy-aci.ps1`

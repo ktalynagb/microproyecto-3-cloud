@@ -1,8 +1,8 @@
 {
   "name": "pcb-yolov8n",
-  "version": "1774627213",
-  "id": "/subscriptions/2a088410-37ec-472a-ae7e-09126fba02a6/resourceGroups/pcb-ml-rg/providers/Microsoft.MachineLearningServices/workspaces/pcb-ml-workspace/models/pcb-yolov8n/versions/1774627213",
-  "path": "azureml://datastores/workspaceblobstore/paths/pcb-results-20260327_103826/best.pt",
-  "job_name": "loyal_sail_x2tp4cn1bd",
-  "timestamp": "2026-03-27 16:00:15.605429+00:00"
+  "version": "1774644158",
+  "id": "/subscriptions/2a088410-37ec-472a-ae7e-09126fba02a6/resourceGroups/pcb-ml-rg/providers/Microsoft.MachineLearningServices/workspaces/pcb-ml-workspace/models/pcb-yolov8n/versions/1774644158",
+  "path": "azureml://datastores/workspaceblobstore/paths/pcb-results-20260327_153612/best.pt",
+  "job_name": "coral_cumin_d1lnwp862r",
+  "timestamp": "2026-03-27 20:42:40.171112+00:00"
 }
