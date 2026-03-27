@@ -2,9 +2,14 @@
 
 Envía trabajos de inferencia al Batch Endpoint y consulta su estado.
 
+Autenticación (en orden de prioridad):
+    1. IMDS – Azure Instance Metadata Service (Managed Identity en ACI)
+    2. Azure CLI – credenciales montadas en ~/.azure (desarrollo local)
+    3. AZURE_ML_API_KEY – clave estática como fallback
+
 Variables de entorno:
     AZURE_ML_BATCH_ENDPOINT_URL   URL completa del endpoint (con /jobs)
-    AZURE_ML_API_KEY              API Key del endpoint
+    AZURE_ML_API_KEY              API Key estática (fallback)
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +30,9 @@ _DEFAULT_BATCH_URL = (
 )
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 2  # segundos
+_TOKEN_BUFFER_SECS = 300  # refrescar el token 5 min antes de que expire
+_IMDS_URL = "http://169.254.169.254/metadata/identity/oauth2/token"
+_AZURE_RESOURCE = "https://management.azure.com/"
 
 
 class AzureMLBatchClient:
@@ -35,7 +44,8 @@ class AzureMLBatchClient:
         URL del endpoint de jobs.  Toma AZURE_ML_BATCH_ENDPOINT_URL si no
         se proporciona.
     api_key:
-        API Key.  Toma AZURE_ML_API_KEY si no se proporciona.
+        API Key estática de fallback.  Toma AZURE_ML_API_KEY si no se
+        proporciona.
     timeout:
         Timeout HTTP en segundos.
     """
@@ -51,13 +61,99 @@ class AzureMLBatchClient:
         )
         self.api_key: str = api_key or os.environ.get("AZURE_ML_API_KEY", "")
         self.timeout = timeout
+        self._token_cache: Optional[str] = None
+        self._token_expiry: float = 0.0
+
+    # ── Token management ───────────────────────────────────────────────────
+
+    def _get_fresh_token(self) -> str:
+        """Devuelve un token Bearer válido, refrescándolo si es necesario.
+
+        Orden de prioridad:
+        1. IMDS (Managed Identity en Azure Container Instances)
+        2. Azure CLI (desarrollo local con ~/.azure montado)
+        3. AZURE_ML_API_KEY estática (fallback)
+
+        Returns:
+            Token Bearer válido.
+
+        Raises:
+            RuntimeError: Si no hay ninguna fuente de credenciales disponible.
+        """
+        now = time.time()
+        if self._token_cache and now < self._token_expiry - _TOKEN_BUFFER_SECS:
+            return self._token_cache
+
+        token = self._fetch_imds_token() or self._fetch_cli_token()
+        if token:
+            return token
+
+        if self.api_key:
+            LOG.debug("Usando AZURE_ML_API_KEY estática")
+            return self.api_key
+
+        raise RuntimeError(
+            "No hay credenciales de Azure disponibles: "
+            "IMDS, Azure CLI y AZURE_ML_API_KEY han fallado"
+        )
+
+    def _fetch_imds_token(self) -> Optional[str]:
+        """Obtiene un token desde Azure IMDS (Managed Identity en ACI)."""
+        try:
+            resp = requests.get(
+                _IMDS_URL,
+                params={
+                    "api-version": "2018-02-01",
+                    "resource": _AZURE_RESOURCE,
+                },
+                headers={"Metadata": "true"},
+                timeout=2,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            token: Optional[str] = data.get("access_token")
+            expires_in = int(data.get("expires_in", 3600))
+            if token:
+                self._token_cache = token
+                self._token_expiry = time.time() + expires_in
+                LOG.info("Token obtenido desde IMDS (Managed Identity)")
+                return token
+        except Exception as exc:  # noqa: BLE001
+            LOG.debug("IMDS no disponible: %s", exc)
+        return None
+
+    def _fetch_cli_token(self) -> Optional[str]:
+        """Obtiene un token desde Azure CLI (desarrollo local)."""
+        try:
+            result = subprocess.run(
+                [
+                    "az", "account", "get-access-token",
+                    "--resource", _AZURE_RESOURCE,
+                    "--query", "accessToken",
+                    "-o", "tsv",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                token = result.stdout.strip()
+                self._token_cache = token
+                self._token_expiry = time.time() + 3600
+                LOG.info("Token obtenido desde Azure CLI")
+                return token
+            if result.stderr.strip():
+                LOG.debug("Azure CLI stderr: %s", result.stderr.strip())
+        except Exception as exc:  # noqa: BLE001
+            LOG.debug("Azure CLI no disponible: %s", exc)
+        return None
 
     # ── Headers ────────────────────────────────────────────────────────────
 
     @property
     def _headers(self) -> Dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {self._get_fresh_token()}",
             "Content-Type": "application/json",
         }
 

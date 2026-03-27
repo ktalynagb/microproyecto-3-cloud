@@ -27,11 +27,14 @@ Sistema de inspección de calidad basada en visión artificial para PCB
 8. [Variables de entorno](#8-variables-de-entorno)
 9. [Backend FastAPI + Azure ML Batch](#9-backend-fastapi--azure-ml-batch)
    - 9.1 [Ejecutar backend local](#91-ejecutar-backend-local)
-   - 9.2 [Desplegar a ACI](#92-desplegar-a-aci)
-   - 9.3 [Endpoints de la API](#93-endpoints-de-la-api)
-   - 9.4 [Ejemplos de uso](#94-ejemplos-de-uso)
-   - 9.5 [Troubleshooting](#95-troubleshooting)
-   - 9.6 [Arquitectura](#96-arquitectura)
+   - 9.2 [Desplegar a ACI](#92-desplegar-a-aci-azure-container-instances)
+   - 9.3 [Flujo de autenticación](#93-flujo-de-autenticación)
+   - 9.4 [Probar el backend por separado](#94-probar-el-backend-por-separado)
+   - 9.5 [Probar el frontend por separado](#95-probar-el-frontend-por-separado)
+   - 9.6 [Endpoints de la API](#96-endpoints-de-la-api)
+   - 9.7 [Ejemplos de uso](#97-ejemplos-de-uso)
+   - 9.8 [Troubleshooting](#98-troubleshooting)
+   - 9.9 [Arquitectura](#99-arquitectura)
 
 ---
 
@@ -879,30 +882,122 @@ Documentación interactiva: <http://localhost:8080/docs>
 **Con Docker (recomendado):**
 
 ```bash
+# Asegúrate de haber ejecutado `az login` antes
+az login
+
 cd deployment/azure
 docker-compose up --build
 ```
 
 Esto levanta el backend en el puerto 8080 y el frontend Streamlit en el 8501.
+El contenedor del backend monta automáticamente `~/.azure` para obtener tokens
+de Azure CLI sin necesidad de configurar `AZURE_ML_API_KEY`.
 
-### 9.2 Desplegar a ACI
+### 9.2 Desplegar a ACI (Azure Container Instances)
+
+#### Opción A: Deploy completo (backend + frontend con Managed Identity)
 
 ```bash
 # 1. Configurar variables
 cp deployment/azure/.env.example deployment/azure/.env
 source deployment/azure/.env
 
-# 2. Ejecutar script de deploy
+# 2. Ejecutar script de deploy con Managed Identity
+bash deployment/azure/deploy-aci.sh
+```
+
+El script `deploy-aci.sh`:
+1. Crea (o reutiliza) un Azure Container Registry
+2. Construye y sube las imágenes de backend y frontend
+3. Crea el Container Instance del **backend** con `--assign-identity`
+4. Asigna roles RBAC (`Contributor`, `Storage Blob Data Contributor`) a la Managed Identity
+5. Crea el Container Instance del **frontend** apuntando al backend
+6. Muestra las URLs públicas al finalizar
+
+> **Sin credenciales hardcodeadas:** con Managed Identity el backend obtiene
+> tokens automáticamente desde el IMDS endpoint (`169.254.169.254`).
+> `AZURE_ML_API_KEY` **no es necesaria** en producción.
+
+#### Opción B: Solo backend (deploy_api.sh, sin Managed Identity)
+
+```bash
+source deployment/azure/.env
 bash deployment/azure/deploy_api.sh
 ```
 
-El script:
-1. Crea (o reutiliza) un Azure Container Registry
-2. Construye y sube la imagen Docker
-3. Crea o actualiza un Azure Container Instance
-4. Muestra la URL pública al finalizar
+### 9.3 Flujo de autenticación
 
-### 9.3 Endpoints de la API
+El cliente `AzureMLBatchClient` obtiene tokens en el siguiente orden de prioridad:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. IMDS (Azure Container Instances – Managed Identity)      │
+│     http://169.254.169.254/metadata/identity/oauth2/token   │
+│     ✅ Sin credenciales · tokens automáticos · 1h validez    │
+├─────────────────────────────────────────────────────────────┤
+│  2. Azure CLI (desarrollo local – ~/.azure montado)          │
+│     az account get-access-token --resource ...              │
+│     ✅ Mismo usuario del host · renovación automática        │
+├─────────────────────────────────────────────────────────────┤
+│  3. AZURE_ML_API_KEY (fallback estático)                     │
+│     Variable de entorno en .env                             │
+│     ⚠️  Expira en 1h · requiere renovación manual            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Los tokens se cachean en memoria y se renuevan automáticamente 5 minutos antes
+de su expiración.  No se requiere intervención manual.
+
+| Entorno | Método | Configuración requerida |
+|---------|--------|------------------------|
+| Local (Docker) | Azure CLI | `az login` + `~/.azure` montado en `docker-compose.yml` |
+| Azure ACI | Managed Identity | `--assign-identity` en `deploy-aci.sh` |
+| CI/CD / fallback | API Key estática | `AZURE_ML_API_KEY` en `.env` |
+
+### 9.4 Probar el backend por separado
+
+Una vez desplegado en ACI, obtén la URL del backend:
+
+```bash
+BACKEND_URL=$(az container show \
+  -g pcb-ml-rg -n pcb-backend-aci \
+  --query 'ipAddress.fqdn' -o tsv)
+
+echo "Backend: http://${BACKEND_URL}:8080"
+```
+
+```bash
+# Health check
+curl http://${BACKEND_URL}:8080/api/v1/health
+
+# Enviar imagen de prueba
+curl -X POST http://${BACKEND_URL}:8080/api/v1/infer \
+  -H "X-API-Key: $BACKEND_API_KEY" \
+  -F "files=@test.jpg"
+# → { "job_id": "uuid-xxx", "status": "submitted" }
+
+# Consultar estado del job
+curl http://${BACKEND_URL}:8080/api/v1/jobs/uuid-xxx \
+  -H "X-API-Key: $BACKEND_API_KEY"
+
+# Obtener resultados cuando status == "completed"
+curl http://${BACKEND_URL}:8080/api/v1/jobs/uuid-xxx/results \
+  -H "X-API-Key: $BACKEND_API_KEY"
+```
+
+### 9.5 Probar el frontend por separado
+
+```bash
+FRONTEND_URL=$(az container show \
+  -g pcb-ml-rg -n pcb-frontend-aci \
+  --query 'ipAddress.fqdn' -o tsv)
+
+echo "Frontend: http://${FRONTEND_URL}:8501"
+```
+
+Abre el navegador en `http://<FRONTEND_URL>:8501`.
+
+### 9.6 Endpoints de la API
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
@@ -913,7 +1008,7 @@ El script:
 
 Todos los endpoints (excepto `/health`) requieren el header `X-API-Key`.
 
-### 9.4 Ejemplos de uso
+### 9.7 Ejemplos de uso
 
 **Health check:**
 
@@ -975,33 +1070,75 @@ for img in results["images"]:
     print(img["filename"], img["has_defects"], img["download_url"])
 ```
 
-### 9.5 Troubleshooting
+### 9.8 Troubleshooting
 
 | Síntoma | Causa probable | Solución |
 |---------|----------------|----------|
 | `403 API Key inválida` | `X-API-Key` incorrecto | Verifica `BACKEND_API_KEY` en `.env` |
 | `502 Error subiendo imágenes` | `AZURE_STORAGE_KEY` incorrecto | Verifica credenciales de storage |
-| `502 Error enviando job al Batch Endpoint` | `AZURE_ML_API_KEY` incorrecto | Obtén la key con `az ml batch-endpoint show-keys` |
+| `401 Unauthorized al Batch Endpoint` | Token expirado o sin credenciales | Ver sección de autenticación abajo |
 | `409 Job aún no completado` | Job en estado `running` | Espera y haz polling; el batch tarda 2-3 min |
 | `404 Job no encontrado` | El backend fue reiniciado (store en memoria) | Reenvía las imágenes |
 
-### 9.6 Arquitectura
+**Error `401 Unauthorized` al Batch Endpoint:**
 
 ```
-┌─────────────────┐    X-API-Key    ┌──────────────────────┐
-│ Frontend        │ ──────────────► │ Backend FastAPI       │
-│ Streamlit       │                 │ (deployment/api/)     │
-│ (app/)          │ ◄────────────── │                       │
-└─────────────────┘   SAS URLs +    └──────────┬───────────┘
+pcb-backend | WARNING – Intento 1/3 fallido: 401 Client Error: Unauthorized
+```
+
+Causas y soluciones:
+
+1. **Local (Docker):** Azure CLI no tiene sesión activa.
+   ```bash
+   az login   # en el host, antes de docker-compose up
+   ```
+
+2. **Local (Docker):** El mount de `~/.azure` no funciona en Windows con rutas
+   de usuario no estándar.  Verifica que `${HOME}/.azure` exista:
+   ```powershell
+   ls $env:USERPROFILE\.azure
+   # Si no existe: az login primero
+   ```
+
+3. **ACI:** La Managed Identity no tiene permisos en el Batch Endpoint.
+   ```bash
+   # Obtener principalId de la Managed Identity
+   PRINCIPAL=$(az container show -g pcb-ml-rg -n pcb-backend-aci \
+     --query identity.principalId -o tsv)
+
+   # Asignar rol al resource group
+   az role assignment create \
+     --assignee "$PRINCIPAL" \
+     --role "Contributor" \
+     --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/pcb-ml-rg"
+   ```
+
+4. **Fallback:** Si nada funciona, genera un token manual temporalmente:
+   ```bash
+   export AZURE_ML_API_KEY=$(az account get-access-token \
+     --resource "https://management.azure.com" \
+     --query accessToken -o tsv)
+   # El token dura 1 hora
+   ```
+
+### 9.9 Arquitectura
+
+```
+┌─────────────────┐    X-API-Key    ┌──────────────────────────────────────┐
+│ Frontend        │ ──────────────► │ Backend FastAPI                       │
+│ Streamlit       │                 │ (deployment/api/)                     │
+│ (app/)          │ ◄────────────── │                                       │
+└─────────────────┘   SAS URLs +    └──────────┬───────────────────────────┘
                        resultados              │
-                                    ┌──────────┼───────────┐
-                                    │          │           │
-                              ┌─────▼──┐  ┌───▼──────┐
-                              │ Azure  │  │  Azure   │
-                              │  ML   │  │  Blob    │
-                              │ Batch │  │ Storage  │
-                              │ Endpt │  │          │
-                              └───────┘  └──────────┘
+                                    ┌──────────┼──────────┐
+                                    │          │          │
+                              ┌─────▼──┐  ┌───▼──────┐  │ Autenticación
+                              │ Azure  │  │  Azure   │  │
+                              │  ML   │  │  Blob    │  ├─ Local: Azure CLI
+                              │ Batch │  │ Storage  │  │  (~/.azure montado)
+                              │ Endpt │  │          │  │
+                              └───────┘  └──────────┘  └─ ACI: Managed Identity
+                                                            (IMDS automático)
 ```
 
 **Flujo:**
