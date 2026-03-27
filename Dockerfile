@@ -3,7 +3,8 @@ FROM python:3.11-slim AS build
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    VENV_PATH=/opt/venv
+    VENV_PATH=/opt/venv \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
 
 # Copiar uv desde imagen oficial
 COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /bin/
@@ -19,7 +20,7 @@ RUN uv pip install --system \
     --index-url https://download.pytorch.org/whl/cpu
 
 # Sincronizar resto de dependencias
-RUN uv sync --locked --no-dev
+RUN uv sync --no-dev
 
 # Copiar código
 COPY app/ ./app/
