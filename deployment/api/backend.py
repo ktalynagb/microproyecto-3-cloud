@@ -10,12 +10,12 @@ Endpoints:
 
 Variables de entorno requeridas (ver .env.example):
     BACKEND_API_KEY             API Key para autenticar clientes
-    AZURE_ML_BATCH_ENDPOINT_URL URL del Batch Endpoint (/jobs)
-    AZURE_ML_API_KEY            API Key del Batch Endpoint
+    AZURE_SUBSCRIPTION_ID       Suscripción de Azure
+    AZURE_RESOURCE_GROUP        Grupo de recursos del workspace de Azure ML
+    AZURE_WORKSPACE_NAME        Nombre del workspace de Azure ML
     AZURE_STORAGE_ACCOUNT       Nombre de la cuenta de storage
     AZURE_STORAGE_KEY           Clave de acceso (nunca se expone al frontend)
-    AZURE_INPUT_CONTAINER       Container de entrada para el batch
-    AZURE_OUTPUT_CONTAINER      Container de salida con resultados
+    AZURE_INPUT_CONTAINER       Container de entrada para el batch (workspaceblobstore)
 
 Uso::
 
@@ -24,7 +24,6 @@ Uso::
 
 from __future__ import annotations
 
-import json
 import logging
 import logging.config
 import os
@@ -182,9 +181,10 @@ async def submit_inference(
             )
         images[upload.filename or f"image_{uuid.uuid4().hex[:8]}.jpg"] = content
 
-    # Generar job_id y subir al blob
+    # Generar job_id y run_id únicos
     job_id = str(uuid.uuid4())
-    LOG.info("Subiendo %d imágenes para job %s", len(images), job_id)
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    LOG.info("Subiendo %d imágenes para job %s (run_id=%s)", len(images), job_id, run_id)
 
     try:
         input_url = _blob_manager.upload_images(images, folder=job_id)
@@ -192,9 +192,9 @@ async def submit_inference(
         LOG.error("Error subiendo imágenes: %s", exc)
         raise HTTPException(status_code=502, detail=f"Error subiendo imágenes: {exc}") from exc
 
-    # Enviar job al Batch Endpoint
+    # Enviar job al Batch Endpoint con ruta de salida dinámica (run_id)
     try:
-        az_job_id = _batch_client.submit_job(input_url)
+        az_job_id = _batch_client.submit_job(input_url, run_id)
     except Exception as exc:
         LOG.error("Error enviando job al Batch Endpoint: %s", exc)
         raise HTTPException(
@@ -202,11 +202,12 @@ async def submit_inference(
             detail=f"Error enviando job al Batch Endpoint: {exc}",
         ) from exc
 
-    LOG.info("Job %s → Azure job %s", job_id, az_job_id)
+    LOG.info("Job %s → Azure job %s (run_id=%s)", job_id, az_job_id, run_id)
 
-    # Guardar mapeo job_id → az_job_id en memoria (simple)
+    # Guardar mapeo job_id → az_job_id + run_id en memoria
     _job_store[job_id] = {
         "az_job_id": az_job_id,
+        "run_id": run_id,
         "created_at": datetime.now(tz=timezone.utc).isoformat(),
         "image_names": list(images.keys()),
     }
@@ -269,6 +270,7 @@ def get_job_results(job_id: str) -> JobResultsResponse:
         raise HTTPException(status_code=404, detail=f"Job no encontrado: {job_id}")
 
     az_job_id: str = entry["az_job_id"]
+    run_id: str = entry["run_id"]
 
     # Verificar estado
     try:
@@ -282,25 +284,27 @@ def get_job_results(job_id: str) -> JobResultsResponse:
             detail=f"Job aún no completado (estado: {info.get('status')})",
         )
 
-    # Obtener URL del output
-    output_url = _batch_client.get_output_url(az_job_id)
-    if output_url is None:
+    # Obtener el container del datastore por defecto de Azure ML
+    try:
+        ml_container = _batch_client.get_default_container()
+    except Exception as exc:
+        LOG.error("Error obteniendo container del datastore: %s", exc)
         raise HTTPException(
             status_code=502,
-            detail="No se pudo obtener la URL de output del job",
-        )
+            detail=f"Error obteniendo container del datastore: {exc}",
+        ) from exc
 
-    # Descargar JSONL
+    # Descargar JSONL desde Blob Storage usando la clave de almacenamiento
     try:
-        records = _batch_client.download_results(output_url)
+        records = _blob_manager.download_jsonl(run_id, ml_container)
     except Exception as exc:
-        LOG.error("Error descargando resultados: %s", exc)
+        LOG.error("Error descargando resultados JSONL: %s", exc)
         raise HTTPException(
             status_code=502,
             detail=f"Error descargando resultados: {exc}",
         ) from exc
 
-    # Generar SAS URLs para las imágenes anotadas
+    # Generar SAS URLs para las imágenes anotadas (opcional, no bloquea)
     try:
         sas_urls = _blob_manager.generate_sas_urls_for_folder(job_id)
     except Exception as exc:

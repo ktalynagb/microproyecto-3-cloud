@@ -3,10 +3,11 @@ version: "3.9"
 # ── Desarrollo local ─────────────────────────────────────────────────────────
 # Uso:
 #   cd deployment/azure
+#   cp .env.example .env          # Rellenar con credenciales reales
 #   docker-compose up --build
 #
-# El frontend se conecta al backend en http://localhost:8080
-# Copia .env.example → .env y rellena las variables antes de arrancar.
+# El frontend se conecta al backend a través de la red interna de Docker
+# usando el nombre del servicio: http://pcb-backend:8080
 #
 # Autenticación local: las credenciales de Azure CLI (~/.azure) se montan en
 # modo solo-lectura para que el backend obtenga tokens automáticamente.
@@ -20,9 +21,23 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - BACKEND_API_KEY=pcb-api-key-super-secreto
-      - API_PORT=8080
-      - LOG_LEVEL=INFO
+      # Backend auth
+      - BACKEND_API_KEY=${BACKEND_API_KEY:-pcb-api-key-super-secreto}
+      - API_PORT=${API_PORT:-8080}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - CORS_EXTRA_ORIGINS=${CORS_EXTRA_ORIGINS:-}
+      # Azure ML Workspace (requerido para SDK)
+      - AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID}
+      - AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP:-pcb-ml-rg}
+      - AZURE_WORKSPACE_NAME=${AZURE_WORKSPACE_NAME:-pcb-ml-workspace}
+      - AZURE_ML_ENDPOINT_NAME=${AZURE_ML_ENDPOINT_NAME:-pcb-batch-inference}
+      - AZURE_ML_DEPLOYMENT=${AZURE_ML_DEPLOYMENT:-pcb-yolov8n-deployment}
+      # Azure Blob Storage
+      - AZURE_STORAGE_ACCOUNT=${AZURE_STORAGE_ACCOUNT}
+      - AZURE_STORAGE_KEY=${AZURE_STORAGE_KEY}
+      - AZURE_INPUT_CONTAINER=${AZURE_INPUT_CONTAINER}
+      - AZURE_OUTPUT_CONTAINER=${AZURE_OUTPUT_CONTAINER:-pcb-results}
+      - AZURE_SAS_TTL_HOURS=${AZURE_SAS_TTL_HOURS:-24}
     # Montar credenciales de Azure CLI para desarrollo local.
     # En Azure Container Instances se usa Managed Identity (sin este mount).
     volumes:
@@ -41,7 +56,9 @@ services:
     ports:
       - "8501:8501"
     environment:
+      # URL del backend (nombre del servicio Docker = pcb-backend)
       - AZURE_BACKEND_URL=http://pcb-backend:8080
+      - BACKEND_API_KEY=${BACKEND_API_KEY:-pcb-api-key-super-secreto}
       - API_HOST=0.0.0.0
       - API_PORT=8501
       - API_TIMEOUT=30

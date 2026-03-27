@@ -1,282 +1,37 @@
-"""Cliente para Azure ML Managed Batch Endpoint.
+"""Cliente para Azure ML Managed Batch Endpoint (SDK-based).
 
-Envía trabajos de inferencia al Batch Endpoint y consulta su estado.
+Envía trabajos de inferencia al Batch Endpoint y consulta su estado
+usando la Azure ML Python SDK, imitando la lógica probada en
+end_to_end_test.py.
 
 Autenticación (en orden de prioridad):
-    1. IMDS – Azure Instance Metadata Service (Managed Identity en ACI)
-    2. Azure CLI – credenciales montadas en ~/.azure (desarrollo local)
-    3. AZURE_ML_API_KEY – clave estática como fallback
+    1. ManagedIdentityCredential – Managed Identity en ACI
+    2. AzureCliCredential         – credenciales ~/.azure (desarrollo local)
 
 Variables de entorno:
-    AZURE_ML_BATCH_ENDPOINT_URL   URL completa del endpoint (con /jobs)
-    AZURE_ML_API_KEY              API Key estática (fallback)
+    AZURE_SUBSCRIPTION_ID   Subscription de Azure
+    AZURE_RESOURCE_GROUP    Grupo de recursos del workspace
+    AZURE_WORKSPACE_NAME    Nombre del workspace de Azure ML
+    AZURE_ML_ENDPOINT_NAME  Nombre del Batch Endpoint (default: pcb-batch-inference)
+    AZURE_ML_DEPLOYMENT     Nombre del deployment (default: pcb-yolov8n-deployment)
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import subprocess
 import time
-from typing import Any, Dict, List, Optional
-
-import requests
+from typing import Any, Dict, Optional
 
 LOG = logging.getLogger(__name__)
 
-_DEFAULT_BATCH_URL = (
-    "https://pcb-batch-inference.centralus.inference.ml.azure.com/jobs"
-)
-_MAX_RETRIES = 3
-_RETRY_BACKOFF = 2  # segundos
-_TOKEN_BUFFER_SECS = 300  # refrescar el token 5 min antes de que expire
-_IMDS_URL = "http://169.254.169.254/metadata/identity/oauth2/token"
-_AZURE_RESOURCE = "https://management.azure.com/"
-
-
-class AzureMLBatchClient:
-    """Cliente para el Batch Endpoint de Azure ML.
-
-    Parameters
-    ----------
-    endpoint_url:
-        URL del endpoint de jobs.  Toma AZURE_ML_BATCH_ENDPOINT_URL si no
-        se proporciona.
-    api_key:
-        API Key estática de fallback.  Toma AZURE_ML_API_KEY si no se
-        proporciona.
-    timeout:
-        Timeout HTTP en segundos.
-    """
-
-    def __init__(
-        self,
-        endpoint_url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: int = 30,
-    ) -> None:
-        self.endpoint_url: str = endpoint_url or os.environ.get(
-            "AZURE_ML_BATCH_ENDPOINT_URL", _DEFAULT_BATCH_URL
-        )
-        # ✅ Intentar obtener el token del .env primero
-        self.api_key: str = api_key or os.environ.get("AZURE_ML_API_KEY", "")
-        self.timeout = timeout
-        self._token_cache: Optional[str] = None
-        self._token_expiry: float = 0.0
-
-    # ── Token management ───────────────────────────────────────────────────
-
-    def _get_fresh_token(self) -> str:
-        """Devuelve un token Bearer válido, refrescándolo si es necesario.
-
-        Orden de prioridad:
-        1. IMDS (Managed Identity en Azure Container Instances)
-        2. Azure CLI (desarrollo local con ~/.azure montado)
-        3. AZURE_ML_API_KEY estática (fallback)
-
-        Returns:
-            Token Bearer válido.
-
-        Raises:
-            RuntimeError: Si no hay ninguna fuente de credenciales disponible.
-        """
-        now = time.time()
-        if self._token_cache and now < self._token_expiry - _TOKEN_BUFFER_SECS:
-            return self._token_cache
-
-        token = self._fetch_imds_token() or self._fetch_cli_token()
-        if token:
-            return token
-
-        if self.api_key:
-            LOG.debug("Usando AZURE_ML_API_KEY estática")
-            return self.api_key
-
-        raise RuntimeError(
-            "No hay credenciales de Azure disponibles: "
-            "IMDS, Azure CLI y AZURE_ML_API_KEY han fallado"
-        )
-
-    def _fetch_imds_token(self) -> Optional[str]:
-        """Obtiene un token desde Azure IMDS (Managed Identity en ACI)."""
-        try:
-            resp = requests.get(
-                _IMDS_URL,
-                params={
-                    "api-version": "2018-02-01",
-                    "resource": _AZURE_RESOURCE,
-                },
-                headers={"Metadata": "true"},
-                timeout=2,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            token: Optional[str] = data.get("access_token")
-            expires_in = int(data.get("expires_in", 3600))
-            if token:
-                self._token_cache = token
-                self._token_expiry = time.time() + expires_in
-                LOG.info("Token obtenido desde IMDS (Managed Identity)")
-                return token
-        except Exception as exc:  # noqa: BLE001
-            LOG.debug("IMDS no disponible: %s", exc)
-        return None
-
-    def _fetch_cli_token(self) -> Optional[str]:
-        """Obtiene un token desde Azure CLI (desarrollo local)."""
-        try:
-            result = subprocess.run(
-                [
-                    "az", "account", "get-access-token",
-                    "--resource", _AZURE_RESOURCE,
-                    "--query", "accessToken",
-                    "-o", "tsv",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                token = result.stdout.strip()
-                self._token_cache = token
-                self._token_expiry = time.time() + 3600
-                LOG.info("Token obtenido desde Azure CLI")
-                return token
-            if result.stderr.strip():
-                LOG.debug("Azure CLI stderr: %s", result.stderr.strip())
-        except Exception as exc:  # noqa: BLE001
-            LOG.debug("Azure CLI no disponible: %s", exc)
-        return None
-
-    # ── Headers ────────────────────────────────────────────────────────────
-
-    @property
-    def _headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self._get_fresh_token()}",
-            "Content-Type": "application/json",
-        }
-
-    # ── Submit job ────────────────────────────────────��────────────────────
-
-    def submit_job(self, input_data_url: str) -> str:
-        """Envía un trabajo al Batch Endpoint y retorna el job_id."""
-        payload = {
-            "properties": {
-                "InputData": {
-                    "input_data": {
-                        "uri": input_data_url,
-                        "job_input_type": "UriFolder",
-                    }
-                }
-            }
-        }
-
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                resp = requests.post(
-                    self.endpoint_url,
-                    headers=self._headers,
-                    json=payload,
-                    timeout=self.timeout,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                job_id: str = data.get("name", data.get("id", ""))
-                LOG.info("Job enviado: %s", job_id)
-                return job_id
-            except requests.RequestException as exc:
-                LOG.warning("Intento %d/%d fallido: %s", attempt, _MAX_RETRIES, exc)
-                if attempt == _MAX_RETRIES:
-                    raise
-                time.sleep(_RETRY_BACKOFF * attempt)
-
-        return ""
-
-    # ── Job status ─────────────────────────────────────────────────────────
-
-    def get_job_status(self, job_id: str) -> Dict[str, Any]:
-        """Consulta el estado de un job."""
-        url = f"{self.endpoint_url}/{job_id}"
-
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                resp = requests.get(
-                    url,
-                    headers=self._headers,
-                    timeout=self.timeout,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                props = data.get("properties", data)
-                raw_status: str = props.get("status", props.get("jobStatus", "unknown"))
-                normalized = _normalize_status(raw_status)
-                return {
-                    "job_id": job_id,
-                    "status": normalized,
-                    "created_at": props.get("creationContext", {}).get("createdAt"),
-                    "updated_at": props.get("creationContext", {}).get("lastModifiedAt"),
-                    "message": props.get("statusMessage"),
-                }
-            except requests.RequestException as exc:
-                LOG.warning("Intento %d/%d fallido: %s", attempt, _MAX_RETRIES, exc)
-                if attempt == _MAX_RETRIES:
-                    raise
-                time.sleep(_RETRY_BACKOFF * attempt)
-
-        return {}
-
-    # ── Get output URL ─────────────────────────────────────────���───────────
-
-    def get_output_url(self, job_id: str) -> Optional[str]:
-        """Retorna la URL del output folder del job."""
-        url = f"{self.endpoint_url}/{job_id}"
-        try:
-            resp = requests.get(url, headers=self._headers, timeout=self.timeout)
-            resp.raise_for_status()
-            data = resp.json()
-            props = data.get("properties", data)
-            outputs = props.get("outputs", {})
-            for key in ("score", "default"):
-                if key in outputs:
-                    return outputs[key].get("uri")
-        except requests.RequestException as exc:
-            LOG.warning("Error obteniendo output URL: %s", exc)
-        return None
-
-    # ── Download JSONL results ─────────────────────────────────────────────
-
-    def download_results(self, results_url: str) -> List[Dict[str, Any]]:
-        """Descarga y parsea el archivo JSONL de resultados."""
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                resp = requests.get(
-                    results_url,
-                    headers=self._headers,
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                records = []
-                for line in resp.text.splitlines():
-                    line = line.strip()
-                    if line:
-                        try:
-                            records.append(json.loads(line))
-                        except json.JSONDecodeError as exc:
-                            LOG.warning("Línea JSONL inválida: %s", exc)
-                return records
-            except requests.RequestException as exc:
-                LOG.warning("Intento %d/%d fallido: %s", attempt, _MAX_RETRIES, exc)
-                if attempt == _MAX_RETRIES:
-                    raise
-                time.sleep(_RETRY_BACKOFF * attempt)
-
-        return []
+_ENDPOINT_NAME = os.environ.get("AZURE_ML_ENDPOINT_NAME", "pcb-batch-inference")
+_DEPLOYMENT_NAME = os.environ.get("AZURE_ML_DEPLOYMENT", "pcb-yolov8n-deployment")
+_BLOB_OUTPUT_PREFIX = "pcb-inference-output"
 
 
 def _normalize_status(raw: str) -> str:
-    """Normaliza el estado devuelto por Azure ML."""
+    """Normaliza el estado devuelto por Azure ML al contrato del frontend."""
     mapping = {
         "notstarted": "submitted",
         "queued": "submitted",
@@ -290,3 +45,173 @@ def _normalize_status(raw: str) -> str:
         "cancelled": "failed",
     }
     return mapping.get(raw.lower(), raw.lower())
+
+
+class AzureMLBatchClient:
+    """Cliente SDK para el Batch Endpoint de Azure ML.
+
+    Parameters
+    ----------
+    subscription_id:
+        ID de suscripción. Lee AZURE_SUBSCRIPTION_ID si no se proporciona.
+    resource_group:
+        Grupo de recursos. Lee AZURE_RESOURCE_GROUP si no se proporciona.
+    workspace_name:
+        Nombre del workspace. Lee AZURE_WORKSPACE_NAME si no se proporciona.
+    endpoint_name:
+        Nombre del Batch Endpoint. Lee AZURE_ML_ENDPOINT_NAME o usa el default.
+    deployment_name:
+        Nombre del deployment. Lee AZURE_ML_DEPLOYMENT o usa el default.
+    """
+
+    def __init__(
+        self,
+        subscription_id: Optional[str] = None,
+        resource_group: Optional[str] = None,
+        workspace_name: Optional[str] = None,
+        endpoint_name: Optional[str] = None,
+        deployment_name: Optional[str] = None,
+    ) -> None:
+        self.subscription_id = subscription_id or os.environ.get(
+            "AZURE_SUBSCRIPTION_ID", ""
+        )
+        self.resource_group = resource_group or os.environ.get(
+            "AZURE_RESOURCE_GROUP", ""
+        )
+        self.workspace_name = workspace_name or os.environ.get(
+            "AZURE_WORKSPACE_NAME", ""
+        )
+        self.endpoint_name = endpoint_name or _ENDPOINT_NAME
+        self.deployment_name = deployment_name or _DEPLOYMENT_NAME
+        # endpoint_url is used by backend.py for health check display
+        self.endpoint_url = (
+            f"https://{self.endpoint_name}.centralus.inference.ml.azure.com/jobs"
+        )
+        self._ml_client = None
+
+    # ── MLClient (lazy init) ────────────────────────────────────────────────
+
+    def _get_ml_client(self):
+        """Crea (o reutiliza) el MLClient con credenciales en cadena.
+
+        Orden de credenciales:
+            1. ManagedIdentityCredential (ACI con Managed Identity)
+            2. AzureCliCredential (desarrollo local con ~/.azure)
+
+        Raises:
+            RuntimeError: Si faltan las variables de workspace.
+        """
+        if self._ml_client is not None:
+            return self._ml_client
+
+        if not all([self.subscription_id, self.resource_group, self.workspace_name]):
+            raise RuntimeError(
+                "Faltan variables de entorno del workspace de Azure ML: "
+                "AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, AZURE_WORKSPACE_NAME"
+            )
+
+        from azure.identity import ChainedTokenCredential, ManagedIdentityCredential, AzureCliCredential
+        from azure.ai.ml import MLClient
+
+        credential = ChainedTokenCredential(
+            ManagedIdentityCredential(),
+            AzureCliCredential(),
+        )
+
+        self._ml_client = MLClient(
+            credential=credential,
+            subscription_id=self.subscription_id,
+            resource_group_name=self.resource_group,
+            workspace_name=self.workspace_name,
+        )
+        LOG.info(
+            "MLClient inicializado para workspace %s/%s",
+            self.resource_group,
+            self.workspace_name,
+        )
+        return self._ml_client
+
+    # ── Submit job ──────────────────────────────────────────────────────────
+
+    def submit_job(self, input_data_url: str, run_id: str) -> str:
+        """Envía un trabajo al Batch Endpoint con una ruta de salida dinámica.
+
+        El output se dirige a:
+            azureml://datastores/workspaceblobstore/paths/
+            pcb-inference-output/{run_id}/predictions.jsonl
+
+        Args:
+            input_data_url: URL del folder de entrada en Blob Storage.
+            run_id: Identificador único de esta corrida (usado para la ruta de salida).
+
+        Returns:
+            Nombre del job de Azure ML (para hacer polling con get_job_status).
+
+        Raises:
+            RuntimeError: Si el envío falla.
+        """
+        from azure.ai.ml import Input, Output
+        from azure.ai.ml.constants import AssetTypes
+
+        blob_path = f"{_BLOB_OUTPUT_PREFIX}/{run_id}/predictions.jsonl"
+        output_path = f"azureml://datastores/workspaceblobstore/paths/{blob_path}"
+
+        ml = self._get_ml_client()
+
+        job = ml.batch_endpoints.invoke(
+            endpoint_name=self.endpoint_name,
+            deployment_name=self.deployment_name,
+            input=Input(type=AssetTypes.URI_FOLDER, path=input_data_url),
+            outputs={"output": Output(type=AssetTypes.URI_FILE, path=output_path)},
+        )
+
+        LOG.info("Job enviado: %s → carpeta de salida: %s", job.name, run_id)
+        return job.name
+
+    # ── Job status ──────────────────────────────────────────────────────────
+
+    def get_job_status(self, az_job_name: str) -> Dict[str, Any]:
+        """Consulta el estado de un job usando la SDK.
+
+        Args:
+            az_job_name: Nombre del job devuelto por submit_job.
+
+        Returns:
+            Dict con status normalizado, created_at, updated_at y message.
+        """
+        ml = self._get_ml_client()
+        try:
+            job = ml.jobs.get(name=az_job_name)
+        except Exception as exc:
+            LOG.error("Error consultando job %s: %s", az_job_name, exc)
+            raise
+
+        raw_status: str = getattr(job, "status", "unknown") or "unknown"
+        creation_ctx = getattr(job, "creation_context", None)
+        created_at = str(getattr(creation_ctx, "created_at", "") or "") if creation_ctx else ""
+        updated_at = str(getattr(creation_ctx, "last_modified_at", "") or "") if creation_ctx else ""
+        return {
+            "job_id": az_job_name,
+            "status": _normalize_status(raw_status),
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "message": getattr(job, "status_message", None),
+        }
+
+    # ── Default datastore container ─────────────────────────────────────────
+
+    def get_default_container(self) -> str:
+        """Obtiene el nombre del contenedor del datastore por defecto.
+
+        Azure ML almacena las salidas en el container interno del workspace
+        (workspaceblobstore).  Este método devuelve ese nombre para que
+        blob_manager pueda acceder directamente a los resultados.
+
+        Returns:
+            Nombre del container de Azure Blob Storage del datastore por defecto.
+        """
+        ml = self._get_ml_client()
+        default_ds = ml.datastores.get_default()
+        container: str = default_ds.container_name
+        LOG.info("Container por defecto del workspace: %s", container)
+        return container

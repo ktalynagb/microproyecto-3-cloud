@@ -1,7 +1,8 @@
 """Gestión de Azure Blob Storage y generación de SAS URLs.
 
-Sube imágenes al container de entrada para el Batch Endpoint y genera
-SAS URLs temporales para las imágenes anotadas de salida.
+Sube imágenes al container de entrada para el Batch Endpoint, genera
+SAS URLs temporales para las imágenes anotadas de salida, y descarga
+el archivo JSONL de resultados producido por el Batch Endpoint.
 
 Variables de entorno:
     AZURE_STORAGE_ACCOUNT       Nombre de la cuenta de storage
@@ -13,11 +14,12 @@ Variables de entorno:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
 from io import BytesIO
+from typing import Any, Dict, List, Optional
 
 LOG = logging.getLogger(__name__)
 
@@ -184,3 +186,51 @@ class BlobManager:
             raise
 
         return urls
+
+    # ── Download JSONL results ──────────────────────────────────────────────
+
+    def download_jsonl(self, run_id: str, container: str) -> List[Dict[str, Any]]:
+        """Descarga y parsea el archivo JSONL de resultados del Batch Endpoint.
+
+        Azure ML guarda las predicciones en el container interno del workspace
+        (workspaceblobstore) bajo la ruta ``pcb-inference-output/{run_id}/predictions.jsonl``.
+        El container real se obtiene con ``ml_client.datastores.get_default().container_name``.
+
+        Args:
+            run_id: Identificador de la corrida (generado en submit_inference).
+            container: Nombre del container del datastore por defecto de Azure ML.
+
+        Returns:
+            Lista de dicts, uno por imagen procesada.
+
+        Raises:
+            azure.core.exceptions.ResourceNotFoundError: Si el blob no existe aún.
+            Exception: Cualquier otro error de red o storage.
+        """
+        from azure.storage.blob import BlobServiceClient
+
+        blob_path = f"pcb-inference-output/{run_id}/predictions.jsonl"
+        LOG.info("Descargando JSONL desde %s/%s", container, blob_path)
+
+        conn_str = (
+            f"DefaultEndpointsProtocol=https;"
+            f"AccountName={self.account};"
+            f"AccountKey={self.key};"
+            "EndpointSuffix=core.windows.net"
+        )
+        blob_service = BlobServiceClient.from_connection_string(conn_str)
+        blob_client = blob_service.get_blob_client(container=container, blob=blob_path)
+
+        content = blob_client.download_blob().readall()
+
+        records: List[Dict[str, Any]] = []
+        for line in content.decode("utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    LOG.warning("Línea JSONL inválida ignorada: %s", exc)
+
+        LOG.info("JSONL descargado: %d registros encontrados", len(records))
+        return records
