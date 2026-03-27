@@ -44,7 +44,7 @@ COPY --from=build /opt/venv /opt/venv
 COPY --from=build /src/app ./app/
 
 # Usuario no-root con home directory
-RUN useradd -m --shell /bin/bash appuser && chown -R /app /app
+RUN useradd -m --shell /bin/bash appuser && chown -R appuser:appuser /app
 
 ENV HOME=/home/appuser
 
