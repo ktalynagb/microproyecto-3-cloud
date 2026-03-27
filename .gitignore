@@ -36,3 +36,4 @@ proto/generated/
 .cache/
 datasets--*/
 *.roboflow/
+.env
