@@ -43,6 +43,13 @@ WORKDIR /app
 COPY --from=build /opt/venv /opt/venv
 COPY --from=build /src/app ./app/
 
+# Usuario no-root con home directory
+RUN useradd -m --shell /bin/bash appuser && chown -R /app /app
+
+ENV HOME=/home/appuser
+
+USER appuser
+
 EXPOSE 8501
 
 CMD ["streamlit", "run", "app/streamlit_app.py", "--server.address", "0.0.0.0"]

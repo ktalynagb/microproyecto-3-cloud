@@ -37,7 +37,8 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl \
+    ca-certificates curl apt-transport-https lsb-release gnupg \
+    && curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -48,8 +49,11 @@ COPY --from=build /usr/local/lib/python3.11/site-packages /usr/local/lib/python3
 # Copiar código fuente
 COPY --from=build /src/*.py ./
 
-# Usuario no-root
-RUN useradd --no-create-home --shell /bin/false appuser && chown -R appuser /app
+# Usuario no-root con home directory para montar credenciales de Azure CLI
+RUN useradd -m --shell /bin/bash appuser && chown -R appuser /app
+
+ENV HOME=/home/appuser
+
 USER appuser
 
 EXPOSE 8080
