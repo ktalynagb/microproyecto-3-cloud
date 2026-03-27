@@ -11,12 +11,12 @@ COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /bin/
 WORKDIR /src
 
 # Cachear instalación de dependencias (antes de copiar el código)
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml ./
 
 # Instalar PyTorch CPU primero
 RUN uv pip install --system \
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.6.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl" \
-    "torchvision @ https://download.pytorch.org/whl/cpu/torchvision-0.21.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl"
+    torch==2.6.0 torchvision==0.21.0 \
+    --index-url https://download.pytorch.org/whl/cpu
 
 # Sincronizar resto de dependencias
 RUN uv sync --locked --no-dev

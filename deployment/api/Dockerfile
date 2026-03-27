@@ -9,16 +9,19 @@ COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /bin/
 
 WORKDIR /src
 
-COPY pyproject.toml uv.lock ./
+# Copiar requirements.txt en lugar de pyproject.toml
+COPY requirements.txt ./
 
-# Instalar PyTorch CPU
+# Instalar PyTorch CPU primero
 RUN uv pip install --system \
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.6.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl" \
-    "torchvision @ https://download.pytorch.org/whl/cpu/torchvision-0.21.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl"
+    torch==2.6.0 torchvision==0.21.0 \
+    --index-url https://download.pytorch.org/whl/cpu
 
-RUN uv sync --locked --no-dev
+# Instalar resto de dependencias
+RUN uv pip install --system --no-cache-dir -r requirements.txt
 
-COPY deployment/api/*.py ./
+# Copiar código fuente
+COPY *.py ./
 
 # Runtime
 FROM python:3.11-slim AS runtime
@@ -39,7 +42,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=build /opt/venv /opt/venv
+# Copiar venv del build
+COPY --from=build /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+
+# Copiar código fuente
 COPY --from=build /src/*.py ./
 
 # Usuario no-root

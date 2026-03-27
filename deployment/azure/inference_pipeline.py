@@ -70,7 +70,12 @@ BATCH_DEPLOYMENT_NAME = "pcb-yolov8n-deployment"
 # entrenamiento (coincide con el ``path`` de la salida de evaluate_component
 # en pipeline_azure.py).
 def _get_latest_model_path() -> str:
-    """Lee la información del modelo registrado desde model_info.json"""
+    """Lee la información del modelo registrado desde model_info.json.
+    
+    Retorna la ruta de almacenamiento (datastore path) del artefacto, no
+    la referencia al registry. Esa ruta es válida tanto para registrar el
+    modelo como para pasársela a ``register_model`` como fallback.
+    """
     model_info_file = _REPO_ROOT / "model_info.json"
     
     if model_info_file.exists():
@@ -78,7 +83,9 @@ def _get_latest_model_path() -> str:
             with open(model_info_file) as f:
                 info = json.load(f)
             logger.info("📦 Usando modelo registrado: %s (v%s)", info["name"], info["version"])
-            return f"azureml://models/{info['name']}/versions/{info['version']}"
+            # info["path"] contiene la ruta de datastore válida, p.ej.:
+            # azureml://datastores/workspaceblobstore/paths/pcb-results-.../best.pt
+            return info["path"]
         except Exception as e:
             logger.warning("⚠️ No se pudo leer model_info.json: %e", e)
     
@@ -255,31 +262,25 @@ def main(model_path: str = DEFAULT_MODEL_OUTPUT_PATH) -> None:
     logger.info("🚀 DESPLEGANDO BATCH ENDPOINT")
     logger.info("=" * 60)
     
-    # ✅ CAMBIO: Obtener el modelo YA REGISTRADO en lugar de registrarlo de nuevo
-    logger.info("📦 Obteniendo modelo registrado: %s", model_path)
-    
-    # Extraer nombre y versión de la ruta
-    # Formato esperado: azureml://models/pcb-yolov8n/versions/1774551004
-    try:
-        parts = model_path.split("/")
-        if "models" in parts:
-            model_name = parts[parts.index("models") + 1]
-            model_version = parts[parts.index("versions") + 1] if "versions" in parts else None
-            
-            # Obtener el modelo registrado
-            if model_version:
-                registered_model = ml_client.models.get(name=model_name, version=model_version)
-            else:
-                registered_model = ml_client.models.get(name=model_name)
-            
+    # 1. Intentar obtener el modelo ya registrado en el registry usando
+    #    el nombre y versión de model_info.json (si existe).
+    registered_model = None
+    _model_info_file = _REPO_ROOT / "model_info.json"
+    if _model_info_file.exists():
+        try:
+            with open(_model_info_file) as _f:
+                _info = json.load(_f)
+            _mn, _mv = _info["name"], str(_info["version"])
+            logger.info("📦 Obteniendo modelo del registry: %s (v%s)", _mn, _mv)
+            registered_model = ml_client.models.get(name=_mn, version=_mv)
             logger.info("✅ Modelo encontrado: %s (v%s)", registered_model.name, registered_model.version)
-        else:
-            # Fallback: si es una ruta de archivo, registrarlo
-            logger.warning("⚠️ Path no es un modelo registrado, intentando registrar...")
-            registered_model = register_model(ml_client, model_path)
-    except Exception as e:
-        logger.error("❌ Error obteniendo modelo: %s", e)
-        logger.info("Intentando registrar modelo desde path...")
+        except Exception as e:
+            logger.warning("⚠️ Modelo no encontrado en registry: %s", e)
+    
+    # 2. Si no se encontró, registrar desde la ruta de almacenamiento.
+    #    model_path apunta a un datastore path válido (azureml://datastores/...).
+    if registered_model is None:
+        logger.info("Registrando modelo desde path: %s", model_path)
         registered_model = register_model(ml_client, model_path)
 
     # 2. Crear el Batch Endpoint
