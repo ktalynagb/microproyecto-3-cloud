@@ -12,3 +12,4 @@ aiofiles==23.2.1
 # Azure SDKs
 azure-storage-blob>=12.24.0
 azure-identity>=1.25.0
+azure-ai-ml>=1.12.0

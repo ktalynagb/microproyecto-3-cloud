@@ -18,15 +18,22 @@ if (Test-Path $envFilePath) {
 
 # ── Configuración (con defaults) ─────────────────────────────────────────────
 $AZURE_SUBSCRIPTION_ID = if ($env:AZURE_SUBSCRIPTION_ID) { $env:AZURE_SUBSCRIPTION_ID } else { throw "Falta AZURE_SUBSCRIPTION_ID en el .env" }
-$AZURE_RESOURCE_GROUP = if ($env:AZURE_RESOURCE_GROUP) { $env:AZURE_RESOURCE_GROUP } else { "pcb-ml-rg" }
-$ACR_NAME = if ($env:ACR_NAME) { $env:ACR_NAME } else { "pcbmlacr" }
-$IMAGE_BACKEND = if ($env:IMAGE_BACKEND) { $env:IMAGE_BACKEND } else { "pcb-backend" }
-$IMAGE_FRONTEND = if ($env:IMAGE_FRONTEND) { $env:IMAGE_FRONTEND } else { "pcb-frontend" }
-$IMAGE_TAG = if ($env:IMAGE_TAG) { $env:IMAGE_TAG } else { "latest" }
-$ACI_BACKEND_NAME = if ($env:ACI_BACKEND_NAME) { $env:ACI_BACKEND_NAME } else { "pcb-backend-aci" }
-$ACI_FRONTEND_NAME = if ($env:ACI_FRONTEND_NAME) { $env:ACI_FRONTEND_NAME } else { "pcb-frontend-aci" }
-$BACKEND_API_KEY = if ($env:BACKEND_API_KEY) { $env:BACKEND_API_KEY } else { "pcb-api-key-super-secreto" }
-$API_PORT = if ($env:API_PORT) { $env:API_PORT } else { "8080" }
+$AZURE_RESOURCE_GROUP  = if ($env:AZURE_RESOURCE_GROUP)  { $env:AZURE_RESOURCE_GROUP  } else { "pcb-ml-rg" }
+$AZURE_WORKSPACE_NAME  = if ($env:AZURE_WORKSPACE_NAME)  { $env:AZURE_WORKSPACE_NAME  } else { "pcb-ml-workspace" }
+$ACR_NAME              = if ($env:ACR_NAME)              { $env:ACR_NAME              } else { "pcbmlacr" }
+$IMAGE_BACKEND         = if ($env:IMAGE_BACKEND)         { $env:IMAGE_BACKEND         } else { "pcb-backend" }
+$IMAGE_FRONTEND        = if ($env:IMAGE_FRONTEND)        { $env:IMAGE_FRONTEND        } else { "pcb-frontend" }
+$IMAGE_TAG             = if ($env:IMAGE_TAG)             { $env:IMAGE_TAG             } else { "latest" }
+$ACI_BACKEND_NAME      = if ($env:ACI_BACKEND_NAME)      { $env:ACI_BACKEND_NAME      } else { "pcb-backend-aci" }
+$ACI_FRONTEND_NAME     = if ($env:ACI_FRONTEND_NAME)     { $env:ACI_FRONTEND_NAME     } else { "pcb-frontend-aci" }
+$BACKEND_API_KEY       = if ($env:BACKEND_API_KEY)       { $env:BACKEND_API_KEY       } else { "pcb-api-key-super-secreto" }
+$API_PORT              = if ($env:API_PORT)              { $env:API_PORT              } else { "8080" }
+$AZURE_STORAGE_ACCOUNT = if ($env:AZURE_STORAGE_ACCOUNT) { $env:AZURE_STORAGE_ACCOUNT } else { throw "Falta AZURE_STORAGE_ACCOUNT en el .env" }
+$AZURE_STORAGE_KEY     = if ($env:AZURE_STORAGE_KEY)     { $env:AZURE_STORAGE_KEY     } else { throw "Falta AZURE_STORAGE_KEY en el .env" }
+$AZURE_INPUT_CONTAINER = if ($env:AZURE_INPUT_CONTAINER) { $env:AZURE_INPUT_CONTAINER } else { throw "Falta AZURE_INPUT_CONTAINER en el .env" }
+$AZURE_OUTPUT_CONTAINER = if ($env:AZURE_OUTPUT_CONTAINER) { $env:AZURE_OUTPUT_CONTAINER } else { "pcb-results" }
+$AZURE_ML_ENDPOINT_NAME = if ($env:AZURE_ML_ENDPOINT_NAME) { $env:AZURE_ML_ENDPOINT_NAME } else { "pcb-batch-inference" }
+$AZURE_ML_DEPLOYMENT   = if ($env:AZURE_ML_DEPLOYMENT)   { $env:AZURE_ML_DEPLOYMENT   } else { "pcb-yolov8n-deployment" }
 
 # ── 2. Login y Preparación ──────────────────────────────────────────────────
 Write-Host "`n── Step 1: Configurando suscripción ──" -ForegroundColor Green
@@ -61,7 +68,19 @@ az container create `
   --ports $API_PORT `
   --assign-identity `
   --os-type Linux `
-  --environment-variables "BACKEND_API_KEY=$BACKEND_API_KEY" "API_PORT=$API_PORT" "LOG_LEVEL=INFO" "AZURE_CLIENT_ID=system" `
+  --environment-variables `
+    "BACKEND_API_KEY=$BACKEND_API_KEY" `
+    "API_PORT=$API_PORT" `
+    "LOG_LEVEL=INFO" `
+    "AZURE_SUBSCRIPTION_ID=$AZURE_SUBSCRIPTION_ID" `
+    "AZURE_RESOURCE_GROUP=$AZURE_RESOURCE_GROUP" `
+    "AZURE_WORKSPACE_NAME=$AZURE_WORKSPACE_NAME" `
+    "AZURE_ML_ENDPOINT_NAME=$AZURE_ML_ENDPOINT_NAME" `
+    "AZURE_ML_DEPLOYMENT=$AZURE_ML_DEPLOYMENT" `
+    "AZURE_STORAGE_ACCOUNT=$AZURE_STORAGE_ACCOUNT" `
+    "AZURE_STORAGE_KEY=$AZURE_STORAGE_KEY" `
+    "AZURE_INPUT_CONTAINER=$AZURE_INPUT_CONTAINER" `
+    "AZURE_OUTPUT_CONTAINER=$AZURE_OUTPUT_CONTAINER" `
   --cpu 1 --memory 2
 
 Write-Host "`n── Step 6: Obteniendo URL del Backend ──" -ForegroundColor Green
@@ -79,7 +98,9 @@ az container create `
   --dns-name-label $ACI_FRONTEND_NAME `
   --ports 8501 `
   --os-type Linux `
-  --environment-variables "API_URL=$API_URL" "BACKEND_API_KEY=$BACKEND_API_KEY" `
+  --environment-variables `
+    "AZURE_BACKEND_URL=$API_URL" `
+    "BACKEND_API_KEY=$BACKEND_API_KEY" `
   --cpu 1 --memory 2
 
 $FRONTEND_FQDN = az container show --resource-group $AZURE_RESOURCE_GROUP --name $ACI_FRONTEND_NAME --query ipAddress.fqdn --output tsv
